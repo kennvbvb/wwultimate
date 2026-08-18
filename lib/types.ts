@@ -139,9 +139,11 @@ export interface Winners {
 
 export interface ImpactSummary {
   total: number;
-  verdictTh: string;
+  verdict: string;
+  tone: 'ok' | 'warn';
+  /** False until the villageImpact numbers are checked against the printed cards. */
   verified: boolean;
-  [k: string]: unknown;
+  note: string;
 }
 
 export interface ModeratorViewModel {

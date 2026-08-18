@@ -255,7 +255,6 @@ export async function runCommand(
     return vm;
   });
 
-  await notifyGameChanged(cmd.gameId, view.version);
   return view;
 }
 
@@ -289,7 +288,6 @@ export async function undoLastCommand(gameId: string): Promise<ModeratorViewMode
     return E.moderatorViewModel(state);
   });
 
-  await notifyGameChanged(gameId, view.version);
   return view;
 }
 
@@ -315,20 +313,17 @@ export async function rematch(gameId: string): Promise<CreatedGame> {
   return { view: E.moderatorViewModel(state), moderatorPin: created.moderatorPin };
 }
 
-/* ---------------- change notification (SSE) ---------------- */
+/* ---------------- change detection (SSE) ---------------- */
 
 /**
- * Serverless instances share no memory, so the stream route cannot be told
- * in-process that a game changed. Postgres NOTIFY reaches whichever instance is
- * holding the open stream; the route also polls the version as a fallback,
- * because a classroom TV must never freeze on a dropped connection.
+ * The stream route asks for this every second or so instead of holding a
+ * LISTEN connection: serverless instances come and go, and a dropped listener
+ * would freeze the classroom TV silently. One indexed lookup is cheap enough
+ * for the handful of screens a single table ever opens.
  */
-export async function notifyGameChanged(gameId: string, version: number): Promise<void> {
-  try {
-    await query('SELECT pg_notify($1, $2)', ['uw_game', JSON.stringify({ gameId, version })]);
-  } catch {
-    /* Notification is an optimisation; the poll fallback still gets there. */
-  }
+export async function readVersion(gameId: string): Promise<number | null> {
+  const res = await query<{ version: number }>('SELECT version FROM games WHERE game_id = $1', [gameId]);
+  return res.rowCount ? Number(res.rows[0].version) : null;
 }
 
 /* ---------------- exports for the moderator ---------------- */

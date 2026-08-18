@@ -39,10 +39,10 @@ export interface RoleDef {
 }
 
 export interface ValidationResult {
-  ok: boolean;
-  errors: string[];
+  problems: string[];
   warnings: string[];
-  [k: string]: unknown;
+  totalCards: number;
+  wolves: number;
 }
 
 /* ---- setup ---- */
