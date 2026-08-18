@@ -1,0 +1,1638 @@
+<script>
+/* ============================================================
+   Ultimate Werewolf Moderator — client
+   ES5 only (var, no arrow functions, no template literals)
+   ============================================================ */
+
+var S = {
+  gameId: '', pin: '', version: 0,
+  vm: null, catalog: [], impactVerified: false, defaults: {},
+  selected: {},          /* roleId -> count */
+  variants: {},
+  players: [],           /* [{name:''}] local editor buffer */
+  packFilter: 'ALL',
+  teamFilter: 'ALL',
+  targets: [],           /* current night step selection */
+  meta: {},              /* current night step meta */
+  nominees: [],
+  votes: {},
+  timerId: null,
+  pollId: null,
+  speech: false,
+  page: 'home'
+};
+
+var LS_KEY = 'uw_moderator_session_v1';
+
+/* ---------------- helpers ---------------- */
+function $(id) { return document.getElementById(id); }
+function showL() { $('ld').classList.add('show'); }
+function hideL() { $('ld').classList.remove('show'); }
+function esc(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                  .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function err(msg) {
+  hideL();
+  Swal.fire({ icon: 'error', title: 'ไม่สำเร็จ', text: String(msg), confirmButtonText: 'เข้าใจแล้ว' });
+}
+function ok(msg) {
+  Swal.fire({ icon: 'success', title: msg, timer: 1300, showConfirmButton: false });
+}
+function toast(msg) {
+  Swal.fire({ toast: true, position: 'top', icon: 'info', title: msg,
+              timer: 1800, showConfirmButton: false });
+}
+function uuid() {
+  var s = '';
+  for (var i = 0; i < 16; i++) s += Math.floor(Math.random() * 16).toString(16);
+  return s + '-' + Date.now();
+}
+function saveSession() {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify({ gameId: S.gameId, pin: S.pin }));
+  } catch (e) { /* private mode */ }
+}
+function readSession() {
+  try {
+    var raw = localStorage.getItem(LS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function clearSession() { try { localStorage.removeItem(LS_KEY); } catch (e) {} }
+
+/* base command envelope: version check + idempotency (spec 10) */
+function cmd(extra) {
+  var c = {
+    gameId: S.gameId,
+    moderatorPin: S.pin,
+    expectedVersion: S.version,
+    idempotencyKey: uuid()
+  };
+  for (var k in extra) if (extra.hasOwnProperty(k)) c[k] = extra[k];
+  return c;
+}
+
+/* single entry point for every server call */
+function call(fn, arg, onDone) {
+  showL();
+  google.script.run
+    .withSuccessHandler(function (res) { hideL(); if (onDone) onDone(res); })
+    .withFailureHandler(function (e) {
+      hideL();
+      var m = e && e.message ? e.message : String(e);
+      if (m.indexOf('เวอร์ชัน') >= 0 || m.indexOf('version') >= 0) {
+        Swal.fire({
+          icon: 'warning', title: 'ข้อมูลไม่ตรงกัน',
+          text: 'มีการเปลี่ยนแปลงจากหน้าจออื่น กำลังโหลดสถานะล่าสุด',
+          timer: 2200, showConfirmButton: false
+        });
+        reloadGame();
+      } else { err(m); }
+    })[fn](arg);
+}
+
+/* every mutation returns the moderator view model */
+function applyVm(vm) {
+  S.vm = vm;
+  S.version = vm.version;
+  S.gameId = vm.gameId;
+  if (vm.ruleVariants) S.variants = vm.ruleVariants;
+  renderTop();
+  routeByStatus();
+}
+function reloadGame() {
+  if (!S.gameId) return;
+  google.script.run
+    .withSuccessHandler(applyVm)
+    .withFailureHandler(function (e) { err(e.message || e); })
+    .apiLoadGame(S.gameId, S.pin);
+}
+
+/* ---------------- boot ---------------- */
+/* The 46-role catalog is identical on every load, so keep a copy in the browser
+   and paint the screen from it immediately instead of staring at a spinner while
+   Apps Script wakes up. The server copy still arrives and overwrites it. */
+var LS_CAT = 'uw_catalog_v1';
+
+function saveCatalogLocal(b) {
+  try {
+    localStorage.setItem(LS_CAT, JSON.stringify({
+      v: b.appVersion, roles: b.catalog.roles,
+      impactVerified: b.catalog.impactVerified, defaults: b.defaults
+    }));
+  } catch (e) { /* private mode or quota — no cache, no problem */ }
+}
+function loadCatalogLocal() {
+  try {
+    var raw = localStorage.getItem(LS_CAT);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function applyCatalog_(roles, impactVerified, defaults) {
+  S.catalog = roles;
+  S.impactVerified = impactVerified;
+  S.defaults = defaults;
+  if (!objSize(S.variants)) S.variants = JSON.parse(JSON.stringify(defaults));
+}
+
+function boot() {
+  if (VIEW_MODE === 'public') { bootPublic(); return; }
+
+  /* 1. instant paint from the local copy, if we have one */
+  var cached = loadCatalogLocal();
+  var warm = false;
+  if (cached && cached.roles && cached.roles.length) {
+    applyCatalog_(cached.roles, cached.impactVerified, cached.defaults);
+    warm = true;
+    renderNav();
+  }
+
+  var sess = readSession();
+  if (sess && sess.gameId) {
+    $('openId').value = sess.gameId;
+    $('openPin').value = sess.pin || '';
+  }
+
+  /* 2. sync with the server; only block the screen if we had nothing to show */
+  if (!warm) showL();
+  google.script.run
+    .withSuccessHandler(function (b) {
+      if (!warm) hideL();
+      applyCatalog_(b.catalog.roles, b.catalog.impactVerified, b.defaults);
+      saveCatalogLocal(b);
+      renderOpenList(b.openGames || []);
+      $('tbSub').textContent = b.appName + ' v' + b.appVersion;
+      renderNav();
+      if (warm && $('roleList') && $('roleList').innerHTML) renderRoles();
+    })
+    .withFailureHandler(function (e) {
+      if (!warm) hideL();
+      if (!warm) err(e.message || e);
+      else toast('ยังเชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กำลังใช้ข้อมูลที่เก็บไว้ในเครื่อง');
+    })
+    .apiBootstrap();
+}
+
+/** Reload the catalog after editing the RoleCatalog sheet. */
+function refreshCatalog() {
+  showL();
+  google.script.run
+    .withSuccessHandler(function (r) {
+      hideL();
+      applyCatalog_(r.catalog.roles, r.catalog.impactVerified, r.defaults);
+      saveCatalogLocal({ appVersion: 'refresh', catalog: r.catalog, defaults: r.defaults });
+      renderRoles(); refreshSum();
+      ok('โหลดข้อมูลบทบาทจากชีตใหม่แล้ว');
+    })
+    .withFailureHandler(function (e) { hideL(); err(e.message || e); })
+    .apiRefreshCatalog();
+}
+
+function bootPublic() {
+  document.body.classList.add('public');
+  $('topbar').style.display = 'none';
+  $('bottomNav').style.display = 'none';
+  showPage('public');
+  S.gameId = PUBLIC_GAME_ID;
+  pollPublic();
+  S.pollId = setInterval(pollPublic, 5000);
+}
+function pollPublic() {
+  google.script.run
+    .withSuccessHandler(renderPublic)
+    .withFailureHandler(function () {})
+    .apiPublicView(S.gameId);
+}
+
+/* ---------------- navigation ---------------- */
+var NAV = [
+  { key: 'players', icon: 'bi-people-fill', label: 'ผู้เล่น' },
+  { key: 'roles', icon: 'bi-collection', label: 'บทบาท' },
+  { key: 'assign', icon: 'bi-person-badge', label: 'แจกการ์ด' },
+  { key: 'night', icon: 'bi-moon-stars-fill', label: 'กลางคืน' },
+  { key: 'day', icon: 'bi-sun-fill', label: 'กลางวัน' },
+  { key: 'end', icon: 'bi-trophy-fill', label: 'สรุป' }
+];
+function renderNav() {
+  if (VIEW_MODE === 'public') return;
+  var h = '';
+  for (var i = 0; i < NAV.length; i++) {
+    var n = NAV[i];
+    h += '<button class="nb' + (S.page === n.key ? ' active' : '') + '" ' +
+         'onclick="showPage(\'' + n.key + '\')"' + (S.gameId ? '' : ' disabled') + '>' +
+         '<i class="bi ' + n.icon + '"></i>' + n.label + '</button>';
+  }
+  $('bottomNav').innerHTML = h;
+  $('bottomNav').classList.toggle('show', !!S.gameId);
+}
+function showPage(key) {
+  S.page = key;
+  var pages = document.querySelectorAll('.page');
+  for (var i = 0; i < pages.length; i++) pages[i].classList.remove('active');
+  var el = $('page-' + key);
+  if (el) el.classList.add('active');
+  window.scrollTo(0, 0);
+  renderNav();
+  if (key === 'players') renderPlayers();
+  if (key === 'roles') { renderVariants(); renderRoles(); refreshSum(); }
+  if (key === 'assign') renderAssign();
+  if (key === 'night') renderNight();
+  if (key === 'day') renderDay();
+  if (key === 'end') renderEnd();
+}
+
+/* status routing after every mutation */
+function routeByStatus() {
+  var st = S.vm.status;
+  if (st === 'SETUP') { showPage(S.vm.players.length ? 'roles' : 'players'); return; }
+  if (st === 'ROLE_ASSIGNMENT') { showPage('assign'); return; }
+  if (st === 'FIRST_NIGHT' || st === 'NIGHT' || st === 'RESOLVE_NIGHT' || st === 'DEATH_TRIGGER') {
+    showPage('night'); return;
+  }
+  if (st === 'DAWN' || st === 'DISCUSSION' || st === 'NOMINATION' ||
+      st === 'VOTING' || st === 'RESOLVE_DAY') {
+    if (st === 'DAWN' || st === 'NOMINATION') { S.nominees = []; S.votes = {}; }
+    showPage('day');
+    return;
+  }
+  if (st === 'FINISHED') { showPage('end'); return; }
+  if (S.page === 'home') showPage('players'); else showPage(S.page);
+}
+
+function renderTop() {
+  var vm = S.vm;
+  if (!vm) return;
+  $('tbTitle').textContent = vm.title || 'Ultimate Werewolf';
+  $('tbSub').textContent = vm.gameId + ' • ' + vm.statusTh;
+  var sb = $('statusbar');
+  sb.classList.add('show');
+  var phase = '';
+  if (vm.nightNumber) phase += 'คืนที่ ' + vm.nightNumber;
+  if (vm.dayNumber) phase += (phase ? ' • ' : '') + 'วันที่ ' + vm.dayNumber;
+  sb.innerHTML =
+    '<span>' + esc(vm.statusTh) + (phase ? ' — ' + phase : '') + '</span>' +
+    '<span>มีชีวิต <b>' + vm.aliveCount + '</b> / ' + vm.totalCount + '</span>';
+  $('btnPause').classList.toggle('on', vm.status === 'PAUSED');
+}
+
+/* ---------------- privacy cover / topbar actions ---------------- */
+function showCover() { $('cover').classList.add('show'); }
+function hideCover() { $('cover').classList.remove('show'); }
+
+function togglePause() {
+  if (!S.gameId) return;
+  var fn = S.vm && S.vm.status === 'PAUSED' ? 'apiResumeGame' : 'apiPauseGame';
+  call(fn, cmd({}), applyVm);
+}
+
+function undoLast() {
+  if (!S.gameId) return;
+  Swal.fire({
+    icon: 'question', title: 'ย้อนคำสั่งล่าสุด',
+    text: 'ระบบจะย้อนกลับไปยังสถานะก่อนคำสั่งสำคัญล่าสุด',
+    showCancelButton: true, confirmButtonText: 'ย้อนกลับ', cancelButtonText: 'ยกเลิก'
+  }).then(function (r) {
+    if (!r.isConfirmed) return;
+    call('apiUndoLastCommand', cmd({}), function (vm) { applyVm(vm); toast('ย้อนคำสั่งแล้ว'); });
+  });
+}
+
+/* ============================================================
+   MODERATOR TOOLS — commands that exist on the server but had no button
+   ============================================================ */
+function openTools() {
+  if (!S.gameId) { toast('ยังไม่ได้เปิดเกม'); return; }
+  var st = S.vm ? S.vm.status : '';
+  var rows = [
+    ['toolSwap', 'bi-arrow-left-right', 'สลับบทบาทระหว่างผู้เล่นสองคน', 'ใช้เมื่อบันทึกการ์ดสลับคนกัน'],
+    ['toolReopen', 'bi-unlock', 'กลับไปแก้การแจกบทบาท', 'ล้างเหตุการณ์ในเกมทั้งหมด ใช้เมื่อแจกผิดตั้งแต่ต้น'],
+    ['toolKill', 'bi-x-octagon', 'สั่งให้ผู้เล่นเสียชีวิต', 'ใช้เมื่อมีเหตุนอกกติกา เช่น ผู้เล่นออกกลางคัน'],
+    ['toolExport', 'bi-table', 'ส่งออกตารางผู้เล่นลงชีต', 'อัปเดตแท็บ Players ให้ตรงสถานะปัจจุบัน'],
+    ['toolEnd', 'bi-flag', 'จบเกมทันที', 'ปิดเกมโดยไม่รอเงื่อนไขชนะ']
+  ];
+  var h = '<div class="toollist">';
+  for (var i = 0; i < rows.length; i++) {
+    h += '<button class="toolbtn" onclick="' + rows[i][0] + '()">' +
+         '<i class="bi ' + rows[i][1] + '"></i>' +
+         '<span><b>' + rows[i][2] + '</b><small>' + rows[i][3] + '</small></span></button>';
+  }
+  h += '</div><div class="hint" style="margin-top:10px;text-align:left">สถานะปัจจุบัน: ' +
+       esc(S.vm ? S.vm.statusTh : '-') + ' • ทุกคำสั่งย้อนกลับได้ด้วยปุ่มย้อนคำสั่ง</div>';
+  Swal.fire({ title: 'เครื่องมือผู้ดำเนินเกม', html: h, width: 480,
+              showConfirmButton: false, showCloseButton: true });
+}
+
+function playerOptionsHtml_(includeDead) {
+  var o = '', ps = S.vm ? S.vm.players : [];
+  for (var i = 0; i < ps.length; i++) {
+    if (!includeDead && !ps[i].alive) continue;
+    o += '<option value="' + ps[i].playerId + '">' + esc(ps[i].seat + '. ' + ps[i].name) +
+         (ps[i].alive ? '' : ' (เสียชีวิต)') + '</option>';
+  }
+  return o;
+}
+
+function toolSwap() {
+  var opts = playerOptionsHtml_(true);
+  Swal.fire({
+    title: 'สลับบทบาท',
+    html: '<div style="text-align:left">' +
+          '<label class="lbl">คนที่หนึ่ง</label><select id="swA" class="inp">' + opts + '</select>' +
+          '<label class="lbl" style="margin-top:10px">คนที่สอง</label><select id="swB" class="inp">' + opts + '</select>' +
+          '</div>',
+    showCancelButton: true, confirmButtonText: 'สลับ', cancelButtonText: 'ยกเลิก',
+    preConfirm: function () {
+      var a = document.getElementById('swA').value, b = document.getElementById('swB').value;
+      if (!a || !b || a === b) { Swal.showValidationMessage('ต้องเลือกคนละคน'); return false; }
+      return { a: a, b: b };
+    }
+  }).then(function (r) {
+    if (!r.isConfirmed) return;
+    call('apiSwapRoles', cmd({ playerA: r.value.a, playerB: r.value.b }), function (vm) {
+      applyVm(vm); ok('สลับบทบาทแล้ว');
+    });
+  });
+}
+
+function toolReopen() {
+  Swal.fire({
+    icon: 'warning', title: 'กลับไปแก้การแจกบทบาท',
+    text: 'เหตุการณ์ทั้งหมดในเกมนี้จะถูกล้าง และเริ่มนับคืนใหม่ ยืนยันหรือไม่',
+    input: 'text', inputPlaceholder: 'เหตุผล (ไม่บังคับ)',
+    showCancelButton: true, confirmButtonText: 'ยืนยัน', cancelButtonText: 'ยกเลิก'
+  }).then(function (r) {
+    if (!r.isConfirmed) return;
+    call('apiReopenRoleAssignment', cmd({ reason: r.value || 'ผู้ดำเนินเกมสั่งแก้ไข' }), function (vm) {
+      ASSIGN = {}; _assignDirty = false;
+      applyVm(vm); ok('กลับสู่หน้าแจกบทบาทแล้ว');
+    });
+  });
+}
+
+function toolKill() {
+  Swal.fire({
+    title: 'สั่งให้ผู้เล่นเสียชีวิต',
+    html: '<div style="text-align:left"><label class="lbl">ผู้เล่น</label>' +
+          '<select id="mkP" class="inp">' + playerOptionsHtml_(false) + '</select></div>',
+    input: 'text', inputPlaceholder: 'เหตุผล',
+    showCancelButton: true, confirmButtonText: 'ยืนยัน', cancelButtonText: 'ยกเลิก',
+    preConfirm: function () {
+      var p = document.getElementById('mkP').value;
+      if (!p) { Swal.showValidationMessage('ต้องเลือกผู้เล่น'); return false; }
+      return p;
+    }
+  }).then(function (r) {
+    if (!r.isConfirmed) return;
+    call('apiModeratorKill', cmd({ playerId: r.value, reason: 'ผู้ดำเนินเกมตัดสิน' }), applyVm);
+  });
+}
+
+function toolExport() {
+  Swal.close();
+  call('apiExportPlayerTable', cmd({}), function (r) {
+    ok('อัปเดตแท็บ Players แล้ว ' + r.rows + ' แถว');
+  });
+}
+
+function toolEnd() {
+  Swal.fire({
+    icon: 'warning', title: 'จบเกมทันที',
+    text: 'ปิดเกมโดยไม่รอเงื่อนไขชนะ แล้วไปหน้าสรุปผล',
+    input: 'text', inputPlaceholder: 'เหตุผล (ไม่บังคับ)',
+    showCancelButton: true, confirmButtonText: 'จบเกม', cancelButtonText: 'ยกเลิก'
+  }).then(function (r) {
+    if (!r.isConfirmed) return;
+    call('apiEndGame', cmd({ reason: r.value || 'ผู้ดำเนินเกมสั่งจบเกม' }), applyVm);
+  });
+}
+
+function openLog() {
+  if (!S.gameId) return;
+  call('apiEventLog', cmd({ limit: 120 }), function (rows) {
+    var h = '<div class="reslist" style="text-align:left;max-height:60vh;overflow:auto">';
+    if (!rows || !rows.length) h += '<div>ยังไม่มีเหตุการณ์</div>';
+    for (var i = rows.length - 1; i >= 0; i--) {
+      var r = rows[i];
+      h += '<div><b>' + esc(r.type) + '</b> <span class="hint">' + esc(r.at || '') + '</span></div>';
+    }
+    h += '</div>';
+    Swal.fire({ title: 'บันทึกเหตุการณ์', html: h, width: 620, confirmButtonText: 'ปิด' });
+  });
+}
+
+/* ============================================================
+   HOME
+   ============================================================ */
+function quickNames(n) {
+  var pool = ['สมชาย', 'สมหญิง', 'วิชัย', 'มานี', 'ปิติ', 'ชูใจ', 'วีระ', 'ดวงใจ',
+              'ธนา', 'ณัฐ', 'ก้อง', 'แพร', 'ฟ้า', 'ต้น', 'มิ้นท์', 'บอส'];
+  var out = [];
+  for (var i = 0; i < n; i++) out.push(pool[i % pool.length] + (i >= pool.length ? '2' : ''));
+  $('newNames').value = out.join('\n');
+}
+
+function parseNames(txt) {
+  var raw = String(txt || '').split('\n');
+  var out = [];
+  for (var i = 0; i < raw.length; i++) {
+    var s = raw[i].replace(/^\s+|\s+$/g, '');
+    if (s) out.push(s.substring(0, 24));
+  }
+  return out;
+}
+
+function createGame() {
+  var names = parseNames($('newNames').value);
+  if (names.length < 3) { err('ต้องมีผู้เล่นอย่างน้อย 3 คน'); return; }
+  call('apiCreateGame', { title: $('newTitle').value || 'เกมหมาป่า', playerNames: names },
+    function (vm) {
+      S.pin = vm.moderatorPin;
+      S.gameId = vm.gameId;
+      saveSession();
+      Swal.fire({
+        icon: 'success',
+        title: 'สร้างเกมแล้ว',
+        html: '<div class="hint">รหัสเกม</div><div style="font-size:1.3rem;font-weight:700">' +
+              esc(vm.gameId) + '</div>' +
+              '<div class="hint" style="margin-top:10px">PIN ผู้ดำเนินเกม (เก็บไว้ให้ดี แสดงครั้งเดียว)</div>' +
+              '<div style="font-size:1.6rem;font-weight:700;letter-spacing:3px;color:#f5b942">' +
+              esc(vm.moderatorPin) + '</div>',
+        confirmButtonText: 'บันทึกแล้ว'
+      });
+      applyVm(vm);
+    });
+}
+
+function openGame() {
+  var gid = $('openId').value.replace(/^\s+|\s+$/g, '');
+  var pin = $('openPin').value.replace(/^\s+|\s+$/g, '');
+  if (!gid) { err('กรุณาใส่รหัสเกม'); return; }
+  showL();
+  google.script.run
+    .withSuccessHandler(function (vm) {
+      hideL();
+      S.gameId = vm.gameId; S.pin = pin; saveSession();
+      applyVm(vm);
+    })
+    .withFailureHandler(function (e) { hideL(); err(e.message || e); })
+    .apiLoadGame(gid, pin);
+}
+
+function renderOpenList(list) {
+  if (!list || !list.length) { $('openList').innerHTML = ''; return; }
+  var h = '<div class="hint">เกมที่ยังไม่จบ</div>';
+  for (var i = 0; i < list.length; i++) {
+    var g = list[i];
+    h += '<div class="prow"><div class="pname">' + esc(g.title || g.gameId) +
+         '<div class="hint">' + esc(g.gameId) + ' • ' + esc(g.status || '') + '</div></div>' +
+         '<button class="mini" onclick="pickOpen(\'' + esc(g.gameId) + '\')">' +
+         '<i class="bi bi-box-arrow-in-right"></i></button></div>';
+  }
+  $('openList').innerHTML = h;
+}
+function pickOpen(gid) { $('openId').value = gid; $('openPin').focus(); }
+
+/* ============================================================
+   PLAYERS
+   ============================================================ */
+function syncPlayersFromVm() {
+  S.players = [];
+  if (!S.vm) return;
+  for (var i = 0; i < S.vm.players.length; i++) S.players.push({ name: S.vm.players[i].name });
+}
+
+function renderPlayers() {
+  if (!S.players.length) syncPlayersFromVm();
+  var locked = S.vm && S.vm.rolesLocked;
+  var h = '';
+  for (var i = 0; i < S.players.length; i++) {
+    h += '<div class="prow">' +
+         '<div class="seatno">' + (i + 1) + '</div>' +
+         '<input class="inp pname" value="' + esc(S.players[i].name) + '" ' +
+         'oninput="S.players[' + i + '].name=this.value" ' + (locked ? 'disabled' : '') + '>' +
+         (locked ? '' :
+           '<button class="mini" onclick="movePlayer(' + i + ',-1)"><i class="bi bi-arrow-up"></i></button>' +
+           '<button class="mini" onclick="movePlayer(' + i + ',1)"><i class="bi bi-arrow-down"></i></button>' +
+           '<button class="mini" onclick="delPlayer(' + i + ')"><i class="bi bi-x-lg"></i></button>') +
+         '</div>';
+  }
+  $('playerEditor').innerHTML = h || '<div class="hint">ยังไม่มีผู้เล่น</div>';
+  renderSeatCircle();
+}
+
+function renderSeatCircle() {
+  var h = '';
+  for (var i = 0; i < S.players.length; i++) {
+    h += '<div class="seat-chip"><b>' + (i + 1) + '</b> ' + esc(S.players[i].name) + '</div>';
+  }
+  $('seatCircle').innerHTML = h;
+}
+
+function movePlayer(i, d) {
+  var j = i + d;
+  if (j < 0 || j >= S.players.length) return;
+  var t = S.players[i]; S.players[i] = S.players[j]; S.players[j] = t;
+  renderPlayers();
+}
+function delPlayer(i) { S.players.splice(i, 1); renderPlayers(); }
+function addPlayerRow() {
+  var n = $('addName').value.replace(/^\s+|\s+$/g, '');
+  if (!n) return;
+  S.players.push({ name: n.substring(0, 24) });
+  $('addName').value = '';
+  renderPlayers();
+}
+
+function savePlayers() {
+  var names = [];
+  for (var i = 0; i < S.players.length; i++) {
+    var n = String(S.players[i].name || '').replace(/^\s+|\s+$/g, '');
+    if (n) names.push(n);
+  }
+  if (names.length < 3) { err('ต้องมีผู้เล่นอย่างน้อย 3 คน'); return; }
+  call('apiSetPlayers', cmd({ playerNames: names }), function (vm) {
+    applyVm(vm);
+    syncPlayersFromVm();
+    showPage('roles');
+  });
+}
+
+/* ============================================================
+   ROLES
+   ============================================================ */
+var VARIANT_UI = [
+  { k: 'roleRevealMode', t: 'เปิดเผยบทบาทของผู้ที่ตาย',
+    o: [['FULL', 'เปิดบทบาทเต็ม'], ['TEAM_ONLY', 'บอกเฉพาะฝ่าย'], ['NONE', 'ไม่เปิดเผย']] },
+  { k: 'tieVoteRule', t: 'เมื่อคะแนนเสมอ',
+    o: [['NO_LYNCH', 'ไม่แขวนใคร'], ['REVOTE', 'ลงคะแนนใหม่'],
+        ['ALL_TIED_DIE', 'แขวนทุกคนที่เสมอ'], ['MODERATOR_DECIDES', 'ผู้ดำเนินเกมตัดสิน']] },
+  { k: 'mayorMode', t: 'นายกเทศมนตรี',
+    o: [['ROLE_CARD', 'ใช้การ์ดบทบาท'], ['ELECTED', 'เลือกตั้งในเกม'], ['DISABLED', 'ปิดใช้งาน']] },
+  { k: 'apprenticeSeerMode', t: 'ผู้หยั่งรู้ฝึกหัด',
+    o: [['INHERIT_ONLY', 'รับช่วงแล้วตรวจคืนละคน'], ['DOUBLE_CHECK', 'คืนที่รับช่วงตรวจได้สองคน']] },
+  { k: 'cupidMode', t: 'กามเทพ',
+    o: [['STANDARD', 'ใช้การ์ดกามเทพ'], ['MODERATOR_SELECTS', 'ผู้ดำเนินเกมจับคู่เอง ไม่ใช้การ์ด']] },
+  { k: 'doppelgangerMode', t: 'ดอพเพลแกงเกอร์',
+    o: [['INHERIT_ON_TARGET_DEATH', 'เห็นการ์ดต้นแบบตั้งแต่คืนแรก'],
+        ['BLIND_INHERIT', 'ไม่เห็นการ์ด รู้เมื่อต้นแบบตาย']] },
+  { k: 'witchMode', t: 'แม่มด',
+    o: [['ONE_HEAL_ONE_KILL', 'ยาชุบชีวิต 1 + ยาพิษ 1'], ['ONE_POWER_TOTAL', 'ใช้พลังได้ครั้งเดียว']] },
+  { k: 'priestMode', t: 'นักบวช',
+    o: [['BLESSING', 'ให้พรคุ้มครอง (ใช้ครั้งเดียว)'], ['DEAD_ROLE_CHECK', 'ตรวจบทบาทผู้ตายได้ทุกคืน']] },
+  { k: 'villageIdiotMode', t: 'คนโง่ประจำหมู่บ้าน',
+    o: [['SURVIVES_LYNCH', 'รอดจากการแขวน แต่โหวตไม่ได้อีก'], ['VOTE_ONLY', 'เสียสิทธิ์โหวตเท่านั้น']] },
+  { k: 'tannerMode', t: 'คนบ้าชนะเมื่อ',
+    o: [['LYNCH_ONLY', 'ถูกโหวตแขวนคอเท่านั้น'], ['ANY_DEATH', 'ตายด้วยวิธีใดก็ได้']] }
+];
+var VARIANT_BOOL = [
+  { k: 'tannerEndsGame', t: 'คนบ้าชนะแล้วจบเกมทันที' },
+  { k: 'vampireEnabled', t: 'เปิดใช้แวมไพร์' },
+  { k: 'vampireDetectableBySeer', t: 'ผู้หยั่งรู้เห็นแวมไพร์เป็นภัย' }
+];
+var VARIANT_NUM = [
+  { k: 'drunkRevealNight', t: 'คนเมารู้ตัวในคืนที่', min: 2, max: 6 },
+  { k: 'discussionSeconds', t: 'เวลาอภิปราย (วินาที)', min: 30, max: 900 },
+  { k: 'nominationSeconds', t: 'เวลาเสนอชื่อ (วินาที)', min: 30, max: 600 },
+  { k: 'nightActionSeconds', t: 'เวลาต่อขั้นตอนกลางคืน (วินาที)', min: 0, max: 180 },
+  { k: 'randomDelayMs', t: 'หน่วงสุ่มตอนข้ามขั้นตอน (มิลลิวินาที)', min: 0, max: 3000 }
+];
+
+function renderVariants() {
+  var h = '';
+  var i, v;
+  for (i = 0; i < VARIANT_UI.length; i++) {
+    v = VARIANT_UI[i];
+    h += '<div><label class="lbl">' + v.t + '</label><select class="inp" ' +
+         'onchange="setVariant(\'' + v.k + '\',this.value)">';
+    for (var j = 0; j < v.o.length; j++) {
+      h += '<option value="' + v.o[j][0] + '"' +
+           (S.variants[v.k] === v.o[j][0] ? ' selected' : '') + '>' + v.o[j][1] + '</option>';
+    }
+    h += '</select></div>';
+  }
+  for (i = 0; i < VARIANT_BOOL.length; i++) {
+    v = VARIANT_BOOL[i];
+    h += '<div><label class="lbl">' + v.t + '</label>' +
+         '<select class="inp" onchange="setVariant(\'' + v.k + '\',this.value===\'1\')">' +
+         '<option value="0"' + (!S.variants[v.k] ? ' selected' : '') + '>ปิด</option>' +
+         '<option value="1"' + (S.variants[v.k] ? ' selected' : '') + '>เปิด</option></select></div>';
+  }
+  for (i = 0; i < VARIANT_NUM.length; i++) {
+    v = VARIANT_NUM[i];
+    h += '<div><label class="lbl">' + v.t + '</label>' +
+         '<input class="inp" type="number" min="' + v.min + '" max="' + v.max + '" value="' +
+         (S.variants[v.k] || 0) + '" onchange="setVariant(\'' + v.k + '\',Number(this.value))"></div>';
+  }
+  $('variantEditor').innerHTML = h;
+}
+function setVariant(k, val) { S.variants[k] = val; }
+
+/* ---- team grouping (ordered) ---- */
+var TEAM_GROUPS = [
+  { key: 'VILLAGE',     th: 'ฝ่ายชาวบ้าน',  icon: 'bi-house-heart' },
+  { key: 'WEREWOLF',    th: 'ฝ่ายหมาป่า',   icon: 'bi-moon-stars' },
+  { key: 'VAMPIRE',     th: 'ฝ่ายแวมไพร์',  icon: 'bi-droplet' },
+  { key: 'CULT',        th: 'ฝ่ายลัทธิ',    icon: 'bi-fire' },
+  { key: 'INDEPENDENT', th: 'ฝ่ายอิสระ',    icon: 'bi-person-badge' }
+];
+
+function setChip(el, sel) {
+  var chips = document.querySelectorAll(sel + ' .chip');
+  for (var i = 0; i < chips.length; i++) chips[i].classList.remove('active');
+  if (el) el.classList.add('active');
+}
+function filterPack(pack, el) {
+  S.packFilter = pack;
+  setChip(el, '.filters[data-kind="pack"]');
+  if (!el) setChip(null, '.filters[data-kind="pack"]');
+  renderRoles();
+}
+function filterTeam(team, el) {
+  S.teamFilter = team;
+  setChip(el, '.filters[data-kind="team"]');
+  renderRoles();
+}
+
+/* keystrokes in the search box must not rebuild 46 rows on every letter */
+var _roleTimer = null;
+function renderRolesLater() {
+  if (_roleTimer) clearTimeout(_roleTimer);
+  _roleTimer = setTimeout(function () { _roleTimer = null; renderRoles(); }, 180);
+}
+
+function roleRowHtml_(r, cnt) {
+  return '<div class="role' + (cnt ? ' picked' : '') + '">' +
+    '<div class="role-main">' +
+      '<div class="role-name">' + esc(r.th) +
+        '<span class="role-en">' + esc(r.en) + '</span>' +
+        '<span class="imp">' + (r.villageImpact > 0 ? '+' : '') + r.villageImpact + '</span>' +
+      '</div>' +
+      (r.noteTh ? '<div class="role-note">' + esc(r.noteTh) + '</div>' : '') +
+    '</div>' +
+    '<div class="stepper">' +
+      '<button class="mini" onclick="bumpRole(\'' + r.roleId + '\',-1)">−</button>' +
+      '<b>' + cnt + '</b>' +
+      '<button class="mini" onclick="bumpRole(\'' + r.roleId + '\',1)">+</button>' +
+    '</div></div>';
+}
+
+function renderRoles() {
+  if (S.vm && S.vm.selectedRoles && !objSize(S.selected)) {
+    for (var s = 0; s < S.vm.selectedRoles.length; s++) {
+      S.selected[S.vm.selectedRoles[s].roleId] = S.vm.selectedRoles[s].count;
+    }
+  }
+  var q = ($('roleSearch').value || '').toLowerCase();
+
+  /* bucket the catalog by team in one pass */
+  var buckets = {}, order = [], gi;
+  for (gi = 0; gi < TEAM_GROUPS.length; gi++) {
+    buckets[TEAM_GROUPS[gi].key] = [];
+    order.push(TEAM_GROUPS[gi].key);
+  }
+
+  for (var i = 0; i < S.catalog.length; i++) {
+    var r = S.catalog[i];
+    if (!r.enabled) continue;
+    var cnt = S.selected[r.roleId] || 0;
+    if (S.packFilter === 'SELECTED') { if (!cnt) continue; }
+    else if (S.packFilter !== 'ALL' && r.pack !== S.packFilter) continue;
+    if (S.teamFilter && S.teamFilter !== 'ALL' && r.team !== S.teamFilter) continue;
+    if (q && (r.th + ' ' + r.en + ' ' + r.roleId).toLowerCase().indexOf(q) < 0) continue;
+    if (!buckets[r.team]) { buckets[r.team] = []; order.push(r.team); }
+    buckets[r.team].push({ r: r, cnt: cnt });
+  }
+
+  var h = '', shown = 0;
+  for (gi = 0; gi < order.length; gi++) {
+    var key = order[gi];
+    var rows = buckets[key];
+    if (!rows || !rows.length) continue;
+
+    var meta = null;
+    for (var m = 0; m < TEAM_GROUPS.length; m++) if (TEAM_GROUPS[m].key === key) meta = TEAM_GROUPS[m];
+
+    /* how many cards of this team are currently in the deck */
+    var picked = 0;
+    for (var c = 0; c < rows.length; c++) picked += rows[c].cnt;
+
+    h += '<div class="grp grp-' + key + '">' +
+         '<i class="bi ' + (meta ? meta.icon : 'bi-tag') + '"></i>' +
+         '<span class="grp-name">' + esc(meta ? meta.th : key) + '</span>' +
+         '<span class="grp-count">' + rows.length + ' บทบาท</span>' +
+         (picked ? '<span class="grp-picked">เลือก ' + picked + ' ใบ</span>' : '') +
+         '</div>';
+
+    for (var k = 0; k < rows.length; k++) {
+      h += roleRowHtml_(rows[k].r, rows[k].cnt);
+      shown++;
+    }
+  }
+
+  $('roleList').innerHTML = shown ? h : '<div class="hint">ไม่พบบทบาทที่ค้นหา</div>';
+}
+
+/* ---- one-tap starter deck sized to the table ---- */
+function quickDeck() {
+  var n = (S.vm && S.vm.players) ? S.vm.players.length : 0;
+  if (n < 5) { toast('ต้องบันทึกรายชื่อผู้เล่นอย่างน้อย 5 คนก่อน'); return; }
+
+  /* wolves ≈ 1 per 4 players, capped so the village always outnumbers them */
+  var wolves = Math.floor(n / 4);
+  if (wolves < 1) wolves = 1;
+  if (wolves > 4) wolves = 4;
+
+  var deck = { werewolf: wolves, seer: 1 };
+  var used = wolves + 1;
+
+  /* add support roles one at a time while there is still room for villagers */
+  var extras = ['bodyguard', 'hunter', 'tanner', 'witch', 'lycan', 'cursed', 'mason'];
+  for (var e = 0; e < extras.length; e++) {
+    if (used >= n - 2) break;                 /* always keep ≥2 plain villagers */
+    if (!roleDef(extras[e])) continue;
+    if (extras[e] === 'mason') {
+      if (used + 2 > n - 2) continue;
+      deck.mason = 2; used += 2;
+    } else { deck[extras[e]] = 1; used += 1; }
+  }
+  if (used < n) deck.villager = n - used;
+
+  S.selected = deck;
+  renderRoles();
+  refreshSum();
+  toast('จัดชุดสำหรับ ' + n + ' คนแล้ว ปรับเพิ่มลดได้ตามต้องการ');
+}
+function objSize(o) { var n = 0; for (var k in o) if (o.hasOwnProperty(k)) n++; return n; }
+
+function roleDef(id) {
+  for (var i = 0; i < S.catalog.length; i++) if (S.catalog[i].roleId === id) return S.catalog[i];
+  return null;
+}
+
+function bumpRole(id, d) {
+  var def = roleDef(id);
+  var cur = S.selected[id] || 0;
+  var next = cur + d;
+  if (next < 0) next = 0;
+  if (def && def.maxCopies && next > def.maxCopies) {
+    toast('บทบาทนี้ใช้ได้สูงสุด ' + def.maxCopies + ' ใบ');
+    next = def.maxCopies;
+  }
+  if (next === 0) delete S.selected[id]; else S.selected[id] = next;
+  renderRoles();
+  refreshSum();
+}
+
+function selectedArray() {
+  var out = [];
+  for (var k in S.selected) if (S.selected.hasOwnProperty(k) && S.selected[k] > 0) {
+    out.push({ roleId: k, count: S.selected[k] });
+  }
+  return out;
+}
+
+function refreshSum() {
+  var cards = 0, impact = 0;
+  for (var k in S.selected) {
+    if (!S.selected.hasOwnProperty(k)) continue;
+    cards += S.selected[k];
+    var d = roleDef(k);
+    if (d) impact += d.villageImpact * S.selected[k];
+  }
+  var np = S.vm ? S.vm.totalCount : S.players.length;
+  $('sumCards').textContent = cards;
+  $('sumPlayers').textContent = np;
+  $('sumImpact').textContent = (impact > 0 ? '+' : '') + impact;
+
+  var msg = '';
+  if (cards !== np) {
+    msg = '<span class="badge2 bad">จำนวนการ์ดยังไม่เท่าจำนวนผู้เล่น</span>';
+  } else {
+    msg = '<span class="badge2">จำนวนการ์ดครบ</span>';
+  }
+  if (!S.impactVerified) {
+    msg += '<div class="hint">ค่า Village Impact เป็นค่าประมาณ แก้ให้ตรงการ์ดจริงได้ในชีต RoleCatalog</div>';
+  }
+  $('balanceMsg').innerHTML = msg;
+}
+
+function saveRoles() {
+  var sel = selectedArray();
+  if (!sel.length) { err('ยังไม่ได้เลือกบทบาท'); return; }
+  /* validate first, then persist */
+  call('apiValidateSelection', cmd({ selectedRoles: sel }), function (check) {
+    var h = '';
+    var i;
+    if (check.problems && check.problems.length) {
+      h += '<div style="text-align:left"><b class="text-bad">ต้องแก้ไข</b><ul>';
+      for (i = 0; i < check.problems.length; i++) h += '<li>' + esc(check.problems[i]) + '</li>';
+      h += '</ul></div>';
+    }
+    if (check.warnings && check.warnings.length) {
+      h += '<div style="text-align:left"><b class="text-sec">ข้อควรระวัง</b><ul>';
+      for (i = 0; i < check.warnings.length; i++) h += '<li>' + esc(check.warnings[i]) + '</li>';
+      h += '</ul></div>';
+    }
+    if (check.impact) {
+      h += '<div class="hint" style="text-align:left">สมดุล: ' + esc(check.impact.verdict) +
+           ' (' + check.impact.total + ')' +
+           (check.impact.note ? '<br>' + esc(check.impact.note) : '') + '</div>';
+    }
+    if (check.problems && check.problems.length) {
+      Swal.fire({ icon: 'error', title: 'ชุดบทบาทยังใช้ไม่ได้', html: h, confirmButtonText: 'กลับไปแก้' });
+      return;
+    }
+    Swal.fire({
+      icon: 'question', title: 'ยืนยันชุดบทบาท', html: h || 'พร้อมใช้งาน',
+      showCancelButton: true, confirmButtonText: 'ยืนยัน', cancelButtonText: 'แก้ไขต่อ'
+    }).then(function (r) {
+      if (!r.isConfirmed) return;
+      call('apiConfigureGame', cmd({ selectedRoles: sel, ruleVariants: S.variants }), function (vm) {
+        applyVm(vm);
+        showPage('assign');
+      });
+    });
+  });
+}
+
+/* ============================================================
+   ASSIGN (secret screen)
+   ============================================================ */
+var ASSIGN = {};   /* playerId -> roleId */
+
+function renderAssign() {
+  var vm = S.vm;
+  if (!vm) return;
+  var i;
+
+  /* checklist of physical cards to pull from the box */
+  var h = '';
+  for (i = 0; i < vm.selectedRoles.length; i++) {
+    var sr = vm.selectedRoles[i];
+    var d = roleDef(sr.roleId);
+    h += '<div class="prow"><div class="seatno">' + sr.count + '</div>' +
+         '<div class="pname">' + esc(d ? d.th : sr.roleId) +
+         '<div class="hint">' + esc(d ? d.en : '') + '</div></div>' +
+         '<span class="tag t-' + (d ? d.team : 'VILLAGE') + '">' + esc(d ? d.teamTh : '') + '</span></div>';
+  }
+  $('deckChecklist').innerHTML = h;
+
+  /* seed from server state */
+  for (i = 0; i < vm.players.length; i++) {
+    if (vm.players[i].baseRoleId) ASSIGN[vm.players[i].playerId] = vm.players[i].baseRoleId;
+  }
+
+  h = '';
+  for (i = 0; i < vm.players.length; i++) {
+    var p = vm.players[i];
+    var cur = ASSIGN[p.playerId] || '';
+    var opts = '<option value="">— ยังไม่ระบุ —</option>';
+    for (var r = 0; r < vm.selectedRoles.length; r++) {
+      var rid = vm.selectedRoles[r].roleId;
+      var rd = roleDef(rid);
+      opts += '<option value="' + rid + '"' + (cur === rid ? ' selected' : '') + '>' +
+              esc(rd ? rd.th : rid) + '</option>';
+    }
+    h += '<div class="prow">' +
+      '<div class="seatno">' + p.seat + '</div>' +
+      '<div class="pname">' + esc(p.name) + '</div>' +
+      '<select class="inp vpick" onchange="setAssign(\'' + p.playerId + '\',this.value)">' +
+      opts + '</select></div>';
+  }
+  $('assignList').innerHTML = h;
+  _assignDirty = false;
+  renderAssignStatusLocal();
+}
+
+/* Changing a dropdown used to fire one server round trip per player, which made
+   this screen crawl on a table of 12. Now we update locally, show the status from
+   local data instantly, and batch the save 1.2s after the last change. */
+var _assignTimer = null;
+var _assignDirty = false;
+
+function setAssign(pid, rid) {
+  if (rid) ASSIGN[pid] = rid; else delete ASSIGN[pid];
+  _assignDirty = true;
+  renderAssignStatusLocal();
+  if (_assignTimer) clearTimeout(_assignTimer);
+  _assignTimer = setTimeout(function () { _assignTimer = null; saveAssign(true); }, 1200);
+}
+
+/** Same checks the server does, computed on the client so the UI never waits. */
+function renderAssignStatusLocal() {
+  var vm = S.vm;
+  if (!vm) return;
+  var quota = {}, i;
+  for (i = 0; i < vm.selectedRoles.length; i++) quota[vm.selectedRoles[i].roleId] = vm.selectedRoles[i].count;
+
+  var used = {}, unassigned = 0;
+  for (i = 0; i < vm.players.length; i++) {
+    var rid = ASSIGN[vm.players[i].playerId];
+    if (!rid) { unassigned++; continue; }
+    used[rid] = (used[rid] || 0) + 1;
+  }
+  var missing = 0, over = 0, k;
+  for (k in quota) if (quota.hasOwnProperty(k)) {
+    var diff = quota[k] - (used[k] || 0);
+    if (diff > 0) missing += diff;
+  }
+  for (k in used) if (used.hasOwnProperty(k)) {
+    var ex = used[k] - (quota[k] || 0);
+    if (ex > 0) over += ex;
+  }
+
+  var h = '';
+  if (!unassigned && !missing && !over) {
+    h = '<span class="badge2">พร้อมเริ่มเกม การ์ดตรงกับผู้เล่นครบทุกใบ</span>';
+  } else {
+    if (unassigned) h += '<span class="badge2 bad">ยังไม่ได้ระบุ ' + unassigned + ' คน</span> ';
+    if (missing) h += '<span class="badge2 bad">การ์ดที่ยังไม่ถูกใช้ ' + missing + ' ใบ</span> ';
+    if (over) h += '<span class="badge2 bad">ใช้เกินโควตา ' + over + ' ใบ</span>';
+  }
+  if (_assignDirty) h += ' <span class="badge2 saving"><i class="bi bi-cloud-arrow-up"></i> ยังไม่บันทึก</span>';
+  $('assignStatus').innerHTML = h;
+}
+
+/** Force a save now — used by the Start Game button and when leaving the page. */
+function flushAssign(after) {
+  if (_assignTimer) { clearTimeout(_assignTimer); _assignTimer = null; }
+  if (!_assignDirty) { if (after) after(); return; }
+  saveAssign(false, after);
+}
+
+function assignArray() {
+  var out = [];
+  for (var pid in ASSIGN) if (ASSIGN.hasOwnProperty(pid) && ASSIGN[pid]) {
+    out.push({ playerId: pid, roleId: ASSIGN[pid] });
+  }
+  return out;
+}
+
+function saveAssign(silent, after) {
+  if (!silent) showL();
+  google.script.run
+    .withSuccessHandler(function (vm) {
+      if (!silent) hideL();
+      S.vm = vm; S.version = vm.version;
+      _assignDirty = false;
+      renderTop();
+      renderAssignStatusLocal();
+      if (after) after();
+    })
+    .withFailureHandler(function (e) {
+      if (!silent) hideL();
+      err((e && e.message) ? e.message : String(e));
+    })
+    .apiAssignRoles(cmd({ assignments: assignArray() }));
+}
+
+
+function shuffleHelper() {
+  var list = [];
+  for (var i = 0; i < S.vm.selectedRoles.length; i++) {
+    var d = roleDef(S.vm.selectedRoles[i].roleId);
+    for (var c = 0; c < S.vm.selectedRoles[i].count; c++) list.push(d ? d.th : S.vm.selectedRoles[i].roleId);
+  }
+  for (var j = list.length - 1; j > 0; j--) {
+    var k = Math.floor(Math.random() * (j + 1));
+    var t = list[j]; list[j] = list[k]; list[k] = t;
+  }
+  var h = '<div style="text-align:left" class="reslist">';
+  for (var m = 0; m < list.length; m++) h += '<div>' + (m + 1) + '. ' + esc(list[m]) + '</div>';
+  h += '</div><div class="hint" style="margin-top:8px">ใช้เป็นลำดับหยิบการ์ดจากกล่อง แล้วนำไปสับจริงก่อนแจก</div>';
+  Swal.fire({ title: 'ลำดับหยิบการ์ด', html: h, width: 460, confirmButtonText: 'ปิด' });
+}
+
+function startGame() {
+  /* make sure any debounced edit is stored before we validate */
+  if (_assignDirty) { flushAssign(startGame); return; }
+  var a = S.vm ? S.vm.assignment : null;
+  if (!a || !a.ready) { err('ยังบันทึกการแจกการ์ดไม่ครบ'); return; }
+  Swal.fire({
+    icon: 'warning', title: 'เริ่มคืนแรก',
+    text: 'หลังจากนี้จะแก้ไขบทบาทได้เฉพาะผ่านเมนูแก้ไขพิเศษเท่านั้น',
+    showCancelButton: true, confirmButtonText: 'เริ่มเลย', cancelButtonText: 'ยังก่อน'
+  }).then(function (r) {
+    if (!r.isConfirmed) return;
+    call('apiStartGame', cmd({}), function (vm) { applyVm(vm); });
+  });
+}
+
+/* ============================================================
+   NIGHT
+   ============================================================ */
+function playerName(pid) {
+  if (!S.vm) return pid;
+  for (var i = 0; i < S.vm.players.length; i++) {
+    if (S.vm.players[i].playerId === pid) return S.vm.players[i].name;
+  }
+  return pid;
+}
+function findVmPlayer(pid) {
+  if (!S.vm) return null;
+  for (var i = 0; i < S.vm.players.length; i++) {
+    if (S.vm.players[i].playerId === pid) return S.vm.players[i];
+  }
+  return null;
+}
+function playerSeat(pid) {
+  for (var i = 0; i < S.vm.players.length; i++) {
+    if (S.vm.players[i].playerId === pid) return S.vm.players[i].seat;
+  }
+  return '?';
+}
+
+function renderNight() {
+  var vm = S.vm;
+  if (!vm) return;
+  S.targets = []; S.meta = {};
+
+  /* pending death triggers take priority over everything */
+  if (vm.pendingPrompts && vm.pendingPrompts.length) {
+    renderPrompt(vm.pendingPrompts[0]);
+    $('stepCard').innerHTML = '';
+  } else {
+    $('promptBox').innerHTML = '';
+    renderStep();
+  }
+  renderNightResults();
+  renderStepList();
+}
+
+function renderPrompt(pr) {
+  var h = '<div class="card2 warn-box"><i class="bi bi-exclamation-triangle-fill"></i><div>' +
+          '<b>' + esc(pr.titleTh) + '</b><div class="hint">' + esc(pr.hintTh || '') + '</div></div></div>' +
+          '<div class="card2"><div class="targets">';
+  for (var i = 0; i < S.vm.players.length; i++) {
+    var p = S.vm.players[i];
+    if (!p.alive || p.playerId === pr.playerId) continue;
+    h += '<button class="tgt" onclick="answerPrompt(\'' + pr.promptId + '\',\'' + p.playerId + '\')">' +
+         esc(p.name) + '<small>ที่นั่ง ' + p.seat + '</small></button>';
+  }
+  h += '</div><button class="btn-ghost w-100" onclick="answerPrompt(\'' + pr.promptId + '\',\'SKY\')">' +
+       'ยิงขึ้นฟ้า (ไม่โดนใคร)</button></div>';
+  $('promptBox').innerHTML = h;
+}
+function answerPrompt(promptId, targetId) {
+  call('apiResolvePrompt', cmd({ promptId: promptId, targetId: targetId }), applyVm);
+}
+
+function renderStep() {
+  var vm = S.vm;
+  var step = vm.currentStep;
+  if (!step) {
+    var allDone = vm.night && vm.night.stepIndex >= vm.night.totalSteps;
+    if (allDone && vm.night && !vm.night.resolved) {
+      $('stepCard').innerHTML =
+        '<div class="step-role">ครบทุกขั้นตอนแล้ว</div>' +
+        '<p class="hint">กดเพื่อประมวลผลกลางคืนและเปิดรุ่งเช้า</p>' +
+        '<button class="btn-gold w-100" onclick="resolveNight()">' +
+        '<i class="bi bi-sunrise-fill"></i> สรุปผลกลางคืน</button>';
+    } else {
+      $('stepCard').innerHTML = '<div class="hint">ไม่มีขั้นตอนที่ต้องทำ</div>';
+    }
+    return;
+  }
+
+  var actors = [];
+  for (var a = 0; a < step.actorIds.length; a++) actors.push(playerName(step.actorIds[a]));
+
+  var h = '<div class="step-role">' + esc(step.titleTh) + '</div>' +
+          '<div class="step-meta">ขั้นที่ ' + (vm.night.stepIndex + 1) + ' / ' + vm.night.totalSteps +
+          (actors.length ? ' • ผู้ใช้พลัง: ' + esc(actors.join(', ')) : '') + '</div>' +
+          '<div class="step-script">' + esc(step.scriptTh || '') + '</div>' +
+          (step.noteTh ? '<div class="step-note"><i class="bi bi-info-circle"></i> ' + esc(step.noteTh) + '</div>' : '');
+
+  if (step.stepId === 'witch') h += witchUi();
+  else if (step.stepId === 'alpha_wolf') h += toggleUi('convert', 'ใช้พลังเปลี่ยนเหยื่อคืนนี้ให้เป็นหมาป่า');
+  else if (step.stepId === 'troublemaker') h += toggleUi('use', 'ใช้พลัง ทำให้พรุ่งนี้แขวนคอสองครั้ง');
+  else if (step.maxTargets > 0) h += targetsUi(step);
+  else h += '<div class="hint">ขั้นตอนนี้ไม่ต้องเลือกเป้าหมาย</div>';
+
+  h += '<div class="d-flex gap-2 mt-3">' +
+       '<button class="btn-p w-100" onclick="submitStep()"><i class="bi bi-check-lg"></i> บันทึก</button>' +
+       (step.optional ? '<button class="btn-ghost" onclick="skipStep()">ข้าม</button>' : '') +
+       '</div>';
+  h += '<button class="btn-ghost w-100 mt-2" onclick="speakStep()">' +
+       '<i class="bi bi-volume-up"></i> อ่านบทออกเสียง</button>';
+  h += '<div class="steptimer" id="stepTimer"></div>';
+  $('stepCard').innerHTML = h;
+  startStepTimer(step.stepId);
+}
+
+/* ---- per-step clock (ruleVariants.nightActionSeconds) ---- */
+var _stepTimerId = null;
+var _stepTimerFor = '';
+var _stepTimerEnds = 0;
+
+function startStepTimer(stepId) {
+  var secs = (S.vm && S.vm.ruleVariants) ? S.vm.ruleVariants.nightActionSeconds : 0;
+  if (!secs) { if ($('stepTimer')) $('stepTimer').innerHTML = ''; return; }
+
+  /* keep counting across re-renders of the same step */
+  if (_stepTimerFor !== stepId) {
+    _stepTimerFor = stepId;
+    _stepTimerEnds = Date.now() + secs * 1000;
+  }
+  if (_stepTimerId) clearInterval(_stepTimerId);
+
+  function tick() {
+    var el = $('stepTimer');
+    if (!el) { clearInterval(_stepTimerId); _stepTimerId = null; return; }
+    var left = Math.round((_stepTimerEnds - Date.now()) / 1000);
+    if (left >= 0) {
+      el.className = 'steptimer' + (left <= 10 ? ' low' : '');
+      el.innerHTML = '<i class="bi bi-hourglass-split"></i> เหลือเวลาแนะนำ ' + left + ' วินาที';
+    } else {
+      el.className = 'steptimer over';
+      el.innerHTML = '<i class="bi bi-hourglass-bottom"></i> เกินเวลาแนะนำ ' + (-left) +
+                     ' วินาที — เร่งผู้เล่นได้แล้ว';
+    }
+  }
+  tick();
+  _stepTimerId = setInterval(tick, 1000);
+}
+function stopStepTimer() {
+  if (_stepTimerId) { clearInterval(_stepTimerId); _stepTimerId = null; }
+  _stepTimerFor = '';
+}
+
+function targetsUi(step) {
+  var wantDead = step.targetRule === 'DEAD_PLAYER';
+  var h = '<div class="targets">';
+  for (var i = 0; i < S.vm.players.length; i++) {
+    var p = S.vm.players[i];
+    var disabled, why = '';
+    if (wantDead) {
+      disabled = p.alive;
+      if (p.alive) why = 'ยังมีชีวิตอยู่';
+    } else {
+      disabled = !p.alive;
+      if (!p.alive) why = 'เสียชีวิตแล้ว';
+      else if (step.actorIds.length === 1 && step.actorIds[0] === p.playerId &&
+               step.targetRule.indexOf('OTHER') >= 0) { disabled = true; why = 'เลือกตัวเองไม่ได้'; }
+    }
+    h += '<button class="tgt' + (disabled ? ' dis' : '') + '" ' +
+         (disabled ? 'disabled' : 'onclick="pickTarget(\'' + p.playerId + '\',' + step.maxTargets + ')"') +
+         ' data-pid="' + p.playerId + '">' + esc(p.name) +
+         '<small>ที่นั่ง ' + p.seat + '</small>' +
+         (why ? '<span class="why">' + why + '</span>' : '') + '</button>';
+  }
+  h += '</div><div class="hint">เลือกได้ ' + step.minTargets + '–' + step.maxTargets + ' คน' +
+       (step.requireAdjacentSecond ? ' • เหยื่อคนที่สองต้องนั่งติดกับคนแรก' : '') + '</div>';
+  return h;
+}
+
+function pickTarget(pid, max) {
+  var idx = -1;
+  for (var i = 0; i < S.targets.length; i++) if (S.targets[i] === pid) idx = i;
+  if (idx >= 0) S.targets.splice(idx, 1);
+  else {
+    if (S.targets.length >= max) S.targets.shift();
+    S.targets.push(pid);
+  }
+  var btns = document.querySelectorAll('#stepCard .tgt');
+  for (var j = 0; j < btns.length; j++) {
+    var on = false;
+    for (var k = 0; k < S.targets.length; k++) if (btns[j].getAttribute('data-pid') === S.targets[k]) on = true;
+    btns[j].classList.toggle('sel', on);
+  }
+}
+
+function witchUi() {
+  var opts = '<option value="">— ไม่เลือก —</option>';
+  for (var i = 0; i < S.vm.players.length; i++) {
+    var p = S.vm.players[i];
+    if (!p.alive) continue;
+    opts += '<option value="' + p.playerId + '">' + esc(p.name) + ' (ที่นั่ง ' + p.seat + ')</option>';
+  }
+  return '<div><label class="lbl">ใช้ยาชุบชีวิตกับเหยื่อคืนนี้</label>' +
+         '<select class="inp" onchange="S.meta.heal=!!this.value;S.meta.healTargetId=this.value">' +
+         opts + '</select></div>' +
+         '<div class="mt-2"><label class="lbl">ใช้ยาพิษกับ</label>' +
+         '<select class="inp" onchange="S.meta.killTargetId=this.value">' + opts + '</select></div>' +
+         '<div class="hint">เว้นว่างทั้งสองช่องหากคืนนี้ยังไม่ใช้พลัง</div>';
+}
+
+function toggleUi(key, label) {
+  return '<div><label class="lbl">' + esc(label) + '</label>' +
+         '<select class="inp" onchange="S.meta[\'' + key + '\']=(this.value===\'1\')">' +
+         '<option value="0">ไม่ใช้</option><option value="1">ใช้</option></select></div>';
+}
+
+function submitStep() {
+  var step = S.vm.currentStep;
+  if (!step) return;
+  if (step.maxTargets > 0 && S.targets.length < step.minTargets && !step.optional) {
+    err('ต้องเลือกอย่างน้อย ' + step.minTargets + ' คน');
+    return;
+  }
+  stopStepTimer();
+  call('apiSubmitRoleAction',
+    cmd({ stepId: step.stepId, targetIds: S.targets, meta: S.meta }),
+    function (vm) {
+      applyVm(vm);
+      var res = vm.night && vm.night.results.length ? vm.night.results[vm.night.results.length - 1] : null;
+      if (res && res.infoTh) {
+        Swal.fire({
+          icon: 'info', title: res.titleTh,
+          html: '<div class="answer">' + esc(res.infoTh) + '</div>',
+          confirmButtonText: 'รับทราบ'
+        });
+      }
+    });
+}
+
+function skipStep() {
+  var step = S.vm.currentStep;
+  if (!step) return;
+  stopStepTimer();
+  /* ruleVariants.randomDelayMs: pause a random moment before moving on so the
+     table cannot tell "no action" steps apart from real ones by the silence. */
+  maskedDelay(function () {
+    call('apiSkipStep', cmd({ stepId: step.stepId }), applyVm);
+  });
+}
+
+function maskedDelay(fn) {
+  var max = (S.vm && S.vm.ruleVariants) ? (S.vm.ruleVariants.randomDelayMs || 0) : 0;
+  if (!max) { fn(); return; }
+  var wait = Math.floor(Math.random() * max) + Math.floor(max / 3);
+  showL();
+  setTimeout(function () { hideL(); fn(); }, wait);
+}
+
+function resolveNight() {
+  call('apiResolveNight', cmd({}), applyVm);
+}
+
+function renderNightResults() {
+  var n = S.vm.night;
+  if (!n || !n.results.length) { $('nightResults').innerHTML = ''; return; }
+  var h = '<h6><i class="bi bi-journal-check"></i> สิ่งที่บันทึกไว้คืนนี้</h6><div class="reslist">';
+  for (var i = 0; i < n.results.length; i++) {
+    h += '<div><b>' + esc(n.results[i].titleTh) + '</b> — ' + esc(n.results[i].infoTh) + '</div>';
+  }
+  h += '</div>';
+  $('nightResults').innerHTML = h;
+}
+
+function renderStepList() {
+  var n = S.vm.night;
+  if (!n) { $('stepList').innerHTML = ''; return; }
+  var h = '';
+  for (var i = 0; i < n.steps.length; i++) {
+    var s = n.steps[i];
+    var cls = 'dot';
+    if (s.status === 'DONE') cls += ' done';
+    else if (s.status === 'SKIPPED') cls += ' skip';
+    else if (i === n.stepIndex) cls += ' now';
+    h += '<div class="steprow"><span class="' + cls + '"></span>' +
+         '<span>' + esc(s.titleTh) + '</span></div>';
+  }
+  $('stepList').innerHTML = h;
+}
+
+/* ---------- Web Speech (optional, Thai) ---------- */
+function speakStep() {
+  var st = S.vm && S.vm.currentStep;
+  if (!st) return;
+  speak(st.titleTh + '. ' + (st.scriptTh || ''));
+}
+function speak(txt) {
+  if (!('speechSynthesis' in window)) { toast('อุปกรณ์นี้ไม่รองรับการอ่านออกเสียง'); return; }
+  try {
+    window.speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance(txt);
+    u.lang = 'th-TH';
+    u.rate = 0.95;
+    window.speechSynthesis.speak(u);
+  } catch (e) { toast('อ่านออกเสียงไม่สำเร็จ'); }
+}
+
+/* ============================================================
+   DAY
+   ============================================================ */
+function renderDay() {
+  var vm = S.vm;
+  if (!vm) return;
+  renderDawn();
+  renderDayBox();
+  renderDayPlayers();
+}
+
+function renderDawn() {
+  var vm = S.vm;
+  var h = '<h6><i class="bi bi-sunrise-fill"></i> รุ่งเช้าวันที่ ' + vm.dayNumber + '</h6>';
+  var deaths = vm.night && vm.night.deaths ? vm.night.deaths : [];
+  if (!deaths.length) {
+    h += '<div class="hint">คืนที่ผ่านมาไม่มีผู้เสียชีวิต</div>';
+  } else {
+    for (var i = 0; i < deaths.length; i++) {
+      var pid = typeof deaths[i] === 'string' ? deaths[i] : deaths[i].playerId;
+      var pl = findVmPlayer(pid);
+      var cause = pl && pl.deathInfo ? pl.deathInfo.causeTh : '';
+      var reveal = vm.ruleVariants.roleRevealMode;
+      var roleTxt = '';
+      if (pl && reveal === 'FULL') roleTxt = pl.currentRoleTh;
+      else if (pl && reveal === 'TEAM_ONLY') roleTxt = pl.teamTh;
+      h += '<div class="deadrow"><i class="bi bi-emoji-dizzy"></i><div>' +
+           '<b>' + esc(pl ? pl.name : pid) + '</b>' +
+           '<div class="hint">' + esc(cause) +
+           (roleTxt ? ' • ' + esc(roleTxt) : '') + '</div></div></div>';
+    }
+  }
+  $('dawnBox').innerHTML = h;
+}
+
+function renderDayBox() {
+  var vm = S.vm;
+  var st = vm.status;
+  var h = '';
+  var i, p;
+
+  if (st === 'DAWN') {
+    h = '<h6>ช่วงกลางวัน</h6><p class="hint">ประกาศผลให้ทุกคนทราบ แล้วเริ่มช่วงอภิปราย</p>' +
+        '<button class="btn-p w-100" onclick="startDiscussion()">' +
+        '<i class="bi bi-chat-dots"></i> เริ่มช่วงอภิปราย</button>';
+  } else if (st === 'DISCUSSION') {
+    h = '<h6>ช่วงอภิปราย</h6>' +
+        '<div class="timer" id="dayTimer">--:--</div>' +
+        '<p class="hint">ให้ทุกคนถกกันจนหมดเวลา หรือกดเปิดการเสนอชื่อได้เลยเมื่อพร้อม</p>' +
+        '<button class="btn-p w-100" onclick="openNomination()">' +
+        '<i class="bi bi-hand-index-thumb"></i> เปิดการเสนอชื่อ</button>' +
+        '<button class="btn-ghost w-100 mt-2" onclick="forceEndDay()">ข้ามการแขวนคอวันนี้</button>';
+    startDayTimer('discussion');
+  } else if (st === 'NOMINATION') {
+    h = '<h6>ช่วงเสนอชื่อ</h6>' +
+        '<div class="timer" id="dayTimer">--:--</div>' +
+        '<p class="hint">แตะชื่อผู้ที่ถูกเสนอ แล้วปิดการเสนอชื่อเพื่อเข้าสู่การลงคะแนน</p>';
+    for (i = 0; i < vm.players.length; i++) {
+      p = vm.players[i];
+      if (!p.alive) continue;
+      var on = false;
+      for (var k = 0; k < S.nominees.length; k++) if (S.nominees[k] === p.playerId) on = true;
+      var exiled = false;
+      for (var b2 = 0; b2 < (p.badges || []).length; b2++) {
+        if (String(p.badges[b2]).indexOf('ส่งออก') >= 0) exiled = true;
+      }
+      h += '<div class="vrow"><div class="seatno">' + p.seat + '</div>' +
+           '<div class="pname">' + esc(p.name) +
+           (exiled ? ' <span class="badge2 bad">ถูกส่งออก</span>' : '') + '</div>' +
+           '<button class="' + (on ? 'btn-gold' : 'btn-ghost') + '" ' +
+           (exiled ? 'disabled ' : '') +
+           'onclick="toggleNominee(\'' + p.playerId + '\')">' +
+           (on ? 'ถูกเสนอชื่อ' : 'เสนอชื่อ') + '</button></div>';
+    }
+    h += '<button class="btn-p w-100 mt-3" onclick="closeNomination()">' +
+         '<i class="bi bi-hand-index"></i> ปิดการเสนอชื่อและเริ่มลงคะแนน</button>' +
+         '<button class="btn-ghost w-100 mt-2" onclick="forceEndDay()">ข้ามการแขวนคอวันนี้</button>';
+    startDayTimer('nomination');
+  } else if (st === 'VOTING') {
+    h = '<h6>ลงคะแนน</h6><p class="hint">บันทึกคะแนนของผู้มีสิทธิ์ทุกคน แล้วกดสรุปผล</p>';
+    var voters = vm.day.eligibleVoters || [];
+    var nomOpts = '<option value="">— ยังไม่ลง —</option>';
+    for (i = 0; i < vm.day.nominees.length; i++) {
+      nomOpts += '<option value="' + vm.day.nominees[i] + '">' +
+                 esc(playerName(vm.day.nominees[i])) + '</option>';
+    }
+    nomOpts += '<option value="SPARE">งดโหวต / ไว้ชีวิต</option>';
+    for (i = 0; i < voters.length; i++) {
+      var v = voters[i];
+      h += '<div class="vrow"><div class="pname">' + esc(v.name) +
+           (v.weight > 1 ? ' <span class="badge2">น้ำหนัก ' + v.weight + '</span>' : '') + '</div>' +
+           '<select class="inp vpick" onchange="S.votes[\'' + v.playerId + '\']=this.value">' +
+           nomOpts + '</select></div>';
+    }
+    h += '<button class="btn-p w-100 mt-3" onclick="submitVotes()">บันทึกคะแนนทั้งหมด</button>' +
+         '<button class="btn-gold w-100 mt-2" onclick="resolveVote()">สรุปผลการลงคะแนน</button>' +
+         '<button class="btn-ghost w-100 mt-2" onclick="forceEndDay()">ปิดวันโดยไม่แขวนคอ</button>';
+  } else if (st === 'RESOLVE_DAY') {
+    h = '<h6>สรุปผลกลางวัน</h6>' +
+        '<button class="btn-p w-100" onclick="nextNight()">' +
+        '<i class="bi bi-moon-stars-fill"></i> เข้าสู่คืนถัดไป</button>';
+  } else if (st === 'DEATH_TRIGGER') {
+    h = '<h6>รอผลกระทบจากการเสียชีวิต</h6>';
+    if (vm.pendingPrompts && vm.pendingPrompts.length) {
+      renderPrompt(vm.pendingPrompts[0]);
+      h += '<div class="hint">ดูกล่องด้านบน</div>';
+    }
+  } else {
+    h = '<div class="hint">' + esc(vm.statusTh) + '</div>';
+  }
+  $('dayBox').innerHTML = h;
+}
+
+function startDayTimer(which) {
+  if (S.timerId) clearInterval(S.timerId);
+  var d = S.vm.day;
+  if (!d) return;
+  var endsAt = (which === 'nomination') ? (d.nominationEndsAt || 0) : (d.discussionEndsAt || 0);
+  if (!endsAt) return;
+  function tick() {
+    var el = $('dayTimer');
+    if (!el) { clearInterval(S.timerId); return; }
+    var left = Math.max(0, Math.floor((endsAt - Date.now()) / 1000));
+    var m = Math.floor(left / 60), s = left % 60;
+    el.textContent = (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+    el.classList.toggle('low', left <= 30);
+  }
+  tick();
+  S.timerId = setInterval(tick, 1000);
+}
+
+function toggleNominee(pid) {
+  var idx = -1;
+  for (var i = 0; i < S.nominees.length; i++) if (S.nominees[i] === pid) idx = i;
+  if (idx >= 0) S.nominees.splice(idx, 1); else S.nominees.push(pid);
+  renderDayBox();
+}
+
+function startDiscussion() {
+  S.nominees = []; S.votes = {};
+  call('apiStartDiscussion', cmd({}), applyVm);
+}
+function openNomination() {
+  S.nominees = [];
+  call('apiOpenNomination', cmd({}), applyVm);
+}
+function closeNomination() {
+  if (!S.nominees.length) { err('ต้องเสนอชื่ออย่างน้อยหนึ่งคน'); return; }
+  call('apiStartNomination', cmd({ nomineeIds: S.nominees }), function (vm) {
+    S.votes = {};
+    applyVm(vm);
+  });
+}
+function submitVotes() {
+  var clean = {};
+  for (var k in S.votes) if (S.votes.hasOwnProperty(k) && S.votes[k]) clean[k] = S.votes[k];
+  if (!objSize(clean)) { err('ยังไม่มีคะแนน'); return; }
+  call('apiSubmitVote', cmd({ votes: clean }), function (vm) { applyVm(vm); toast('บันทึกคะแนนแล้ว'); });
+}
+function resolveVote(choice) {
+  showL();
+  google.script.run
+    .withSuccessHandler(function (vm) { hideL(); applyVm(vm); })
+    .withFailureHandler(function (e) {
+      hideL();
+      var m = e && e.message ? e.message : String(e);
+      if (m.indexOf('เสมอ') >= 0 && !choice) { askTieChoice(); return; }
+      err(m);
+    })
+    .apiResolveVote(cmd({ moderatorChoice: choice || null }));
+}
+
+function askTieChoice() {
+  var opts = {};
+  var noms = S.vm.day.nominees;
+  for (var i = 0; i < noms.length; i++) opts[noms[i]] = playerName(noms[i]);
+  Swal.fire({
+    icon: 'question', title: 'คะแนนเสมอ',
+    text: 'ผู้ดำเนินเกมต้องเลือกผู้ถูกกำจัด',
+    input: 'select', inputOptions: opts, inputPlaceholder: 'เลือกผู้เล่น',
+    showCancelButton: true, confirmButtonText: 'ยืนยัน', cancelButtonText: 'ยกเลิก'
+  }).then(function (r) {
+    if (r.isConfirmed && r.value) resolveVote(r.value);
+  });
+}
+function forceEndDay() {
+  Swal.fire({
+    icon: 'question', title: 'ปิดวันโดยไม่แขวนคอ', showCancelButton: true,
+    confirmButtonText: 'ปิดวัน', cancelButtonText: 'ยกเลิก'
+  }).then(function (r) {
+    if (r.isConfirmed) call('apiForceEndDay', cmd({}), applyVm);
+  });
+}
+function nextNight() {
+  call('apiForceEndDay', cmd({}), applyVm);
+}
+
+function renderDayPlayers() {
+  var vm = S.vm;
+  var h = '';
+  for (var i = 0; i < vm.players.length; i++) {
+    var p = vm.players[i];
+    var badges = '';
+    for (var b = 0; b < p.statuses.length; b++) badges += '<span class="badge2">' + esc(p.statuses[b]) + '</span>';
+    if (p.changedTeam) badges += '<span class="badge2 bad">เปลี่ยนฝ่าย</span>';
+    h += '<div class="prow' + (p.alive ? '' : ' dead') + '">' +
+      '<div class="seatno">' + p.seat + '</div>' +
+      '<div class="pname">' + esc(p.name) +
+        '<div class="hint">' + esc(p.currentRoleTh || '—') +
+        (p.teamTh ? ' • ' + esc(p.teamTh) : '') + '</div>' + badges + '</div>' +
+      (p.alive ? '<button class="mini" onclick="modKill(\'' + p.playerId + '\')" title="สั่งให้เสียชีวิต">' +
+                 '<i class="bi bi-x-octagon"></i></button>' : '') +
+      '</div>';
+  }
+  $('dayPlayers').innerHTML = h;
+}
+
+function modKill(pid) {
+  Swal.fire({
+    icon: 'warning', title: 'ให้ ' + playerName(pid) + ' เสียชีวิต',
+    input: 'text', inputPlaceholder: 'เหตุผล เช่น ออกจากเกม',
+    showCancelButton: true, confirmButtonText: 'ยืนยัน', cancelButtonText: 'ยกเลิก'
+  }).then(function (r) {
+    if (!r.isConfirmed) return;
+    call('apiModeratorKill', cmd({ playerId: pid, reason: r.value || 'ผู้ดำเนินเกมตัดสิน' }), applyVm);
+  });
+}
+
+/* ============================================================
+   END
+   ============================================================ */
+function renderEnd() {
+  if (!S.vm) return;
+  call('apiFinalSummary', cmd({}), function (sum) {
+    var h = '<div class="winner"><div class="wt">' +
+            esc((sum.teamsTh && sum.teamsTh.length) ? sum.teamsTh.join(' + ') : 'จบเกม') + '</div>' +
+            '<div class="hint">' + esc(sum.reasonTh || '') + '</div>';
+    if (sum.individuals && sum.individuals.length) {
+      h += '<div class="mt-2">';
+      for (var q = 0; q < sum.individuals.length; q++) {
+        h += '<span class="badge2">' + esc(sum.individuals[q].name || sum.individuals[q]) + ' ชนะเดี่ยว</span>';
+      }
+      h += '</div>';
+    }
+    h += '</div><table class="sumtable"><tr><th>ที่นั่ง</th><th>ชื่อ</th><th>บทบาท</th>' +
+         '<th>ฝ่าย</th><th>สถานะ</th></tr>';
+    for (var i = 0; i < sum.players.length; i++) {
+      var p = sum.players[i];
+      h += '<tr><td>' + p.seat + '</td><td>' + esc(p.name) + '</td>' +
+           '<td>' + esc(p.finalRoleTh) +
+           (p.baseRoleTh && p.baseRoleTh !== p.finalRoleTh ? ' <span class="hint">(เดิม ' +
+             esc(p.baseRoleTh) + ')</span>' : '') + '</td>' +
+           '<td>' + esc(p.teamTh) + '</td>' +
+           '<td>' + (p.alive ? 'รอด' : esc(p.causeTh)) + '</td></tr>';
+    }
+    h += '</table><button class="btn-p w-100 mt-3" onclick="rematch()">' +
+         '<i class="bi bi-arrow-repeat"></i> เล่นอีกรอบด้วยที่นั่งเดิม</button>';
+    $('endBox').innerHTML = h;
+
+    var t = '<div class="reslist">';
+    for (var j = 0; j < sum.timeline.length; j++) {
+      t += '<div>' + esc(sum.timeline[j].textTh || sum.timeline[j].text || '') + '</div>';
+    }
+    t += '</div>';
+    $('endTimeline').innerHTML = t;
+  });
+}
+
+function rematch() {
+  call('apiRematch', cmd({}), function (vm) {
+    S.pin = vm.moderatorPin || S.pin;
+    S.selected = {};
+    ASSIGN = {};
+    S.nominees = []; S.votes = {};
+    saveSession();
+    applyVm(vm);
+    toast('สร้างเกมใหม่ด้วยที่นั่งเดิมแล้ว');
+  });
+}
+
+/* ============================================================
+   PUBLIC SCREEN
+   ============================================================ */
+function renderPublic(pv) {
+  if (!pv) return;
+  $('pubPhase').textContent = pv.statusTh;
+  $('pubCount').textContent = 'มีชีวิต ' + pv.aliveCount + ' / ' + pv.totalCount;
+
+  var endsAt = pv.day ? pv.day.discussionEndsAt : 0;
+  if (endsAt) {
+    var left = Math.max(0, Math.floor((endsAt - Date.now()) / 1000));
+    var m = Math.floor(left / 60), s = left % 60;
+    $('pubTimer').textContent = (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+    $('pubTimer').classList.toggle('low', left <= 30);
+  } else {
+    $('pubTimer').textContent = '';
+  }
+
+  var h = '', i;
+  for (i = 0; i < pv.players.length; i++) {
+    var p = pv.players[i];
+    var sub = p.alive ? (p.badges.length ? p.badges.join(' • ') : 'ที่นั่ง ' + p.seat)
+                      : (p.roleTh || p.teamTh || p.causeTh || 'เสียชีวิต');
+    h += '<div class="pub-card' + (p.alive ? '' : ' gone') + '">' +
+         '<div class="pn">' + esc(p.name) + '</div>' +
+         '<div class="ps">' + esc(sub) + '</div></div>';
+  }
+  $('pubPlayers').innerHTML = h;
+
+  h = '';
+  var tl = pv.timelinePublic || [];
+  for (i = tl.length - 1; i >= 0 && i > tl.length - 12; i--) {
+    h += '<div>' + esc(tl[i].textTh || tl[i].text || '') + '</div>';
+  }
+  $('pubLog').innerHTML = h;
+
+  if (pv.winners) {
+    $('pubPhase').textContent = 'จบเกม';
+  }
+}
+
+/* ---------------- go ---------------- */
+window.addEventListener('load', boot);
+</script>
