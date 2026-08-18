@@ -111,7 +111,14 @@ export interface DayView {
   eligibleVoters: { playerId: string; name: string; weight: number }[];
 }
 
-export interface TimelineEntry { at: string; icon: string; textTh: string; [k: string]: unknown; }
+export interface TimelineEntry {
+  at: string;
+  phase: GameStatus;
+  dayNumber: number;
+  nightNumber: number;
+  icon: string;
+  text: string;
+}
 
 export interface PendingPrompt {
   promptId: string;
