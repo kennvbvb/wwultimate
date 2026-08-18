@@ -7,7 +7,7 @@
 
 ## 1. โปรเจกต์นี้คืออะไร
 
-เว็บแอปบน **Google Apps Script** ช่วย *ผู้ดำเนินเกม (Moderator)* ดำเนินเกมกระดาน
+เว็บแอปบน **Next.js 15 + Vercel + Postgres** ช่วย *ผู้ดำเนินเกม (Moderator)* ดำเนินเกมกระดาน
 **Ultimate Werewolf: Deluxe Edition** สำหรับการเล่นแบบเจอหน้ากันโดยใช้การ์ดจริง
 
 แอปทำหน้าที่เป็น "สมองและสมุดจด" ของผู้ดำเนินเกม — จำว่าใครเป็นอะไร คำนวณผลกลางคืน
@@ -20,7 +20,7 @@
 
 - ห้ามปนกติกาของ **One Night Ultimate Werewolf** (คนละเกม คนละกติกา)
 - ห้ามคัดลอกข้อความหรือภาพจากการ์ดจริง — บทพูดผู้ดำเนินเกมต้องเขียนขึ้นใหม่
-- จอสาธารณะ **ห้ามรั่วบทบาทของผู้เล่นที่ยังมีชีวิตอยู่** เด็ดขาด (มีเทสต์คุมไว้)
+- จอสาธารณะ **ห้ามรั่วบทบาทของผู้เล่นที่ยังมีชีวิตอยู่** เด็ดขาด (มีเทสต์คุมไว้ 3 ข้อ)
 
 ---
 
@@ -28,94 +28,114 @@
 
 | หัวข้อ | สถานะ |
 |---|---|
-| เวอร์ชัน | 1.0.0 |
-| ชุดทดสอบ | **ผ่าน 77 / ล้มเหลว 0** (`node tests/run.js`) |
+| เวอร์ชัน | 2.0.0 (ย้ายจาก Google Apps Script 1.0.0 มาแล้วครบทุกเฟส) |
+| ชุดทดสอบ | **ผ่าน 80 / ล้มเหลว 0** (`npm test`) |
 | บทบาท | ครบ 46 (Core 34 / Wolfpack 6 / Hunting Party 6) |
-| API สาธารณะ | 31 ฟังก์ชัน ทุกตัวมีปุ่มเรียกจากหน้าจอแล้ว |
+| คำสั่งที่หน้าเว็บสั่งได้ | 22 ตัว ทุกตัวมีปุ่มเรียกจากหน้าจอและถูกยิงใน `npm run smoke` |
 | ตัวเลือกกติกา | 18 ตัว ทุกตัวมีโค้ดรองรับจริงและมีเทสต์คุม |
-| ประสิทธิภาพ | ทำระยะที่ 1 แล้ว (ระยะ 2–3 ยังไม่ทำ ดูข้อ 9) |
-| โค้ดรวม | 7,236 บรรทัด |
+| ตรรกะเกม | 2,770 บรรทัด ไม่ถูกแก้แม้แต่บรรทัดเดียวระหว่างย้าย |
+
+ประวัติเวอร์ชัน Apps Script อยู่ใน git history (commit `GAS version 1.0.0`)
 
 ---
 
 ## 3. แผนผังไฟล์
 
 ```
-src/
-  Config.gs               144  ค่าคงที่ สถานะ ทีม สาเหตุการตาย defaultRuleVariants()
-  RoleCatalog.gs          397  ฐานข้อมูลบทบาท 46 ตัว + applyCatalogOverrides()
-  Utils.gs                166  helper ผู้เล่น ที่นั่ง สถานะ ทีม assertVersion()
-  Validation.gs           184  ตรวจเป้าหมาย/การเลือกบทบาท/การโหวต พร้อมเหตุผลไทย
-  WinConditionService.gs  206  เงื่อนไขชนะแยกทีม + ผู้ชนะเดี่ยว
-  EffectResolver.gs       443  attemptKill() คิวการตายลูกโซ่ resolveNight() 11 ขั้น
-  RuleEngine.gs          1002  state machine ทั้งหมด (แกนกลางของระบบ)
-  GameService.gs          228  สร้าง view model แยกจอผู้ดำเนินเกม/จอสาธารณะ
-  Storage.gs              356  บันทึกลง Sheets, snapshot, lock, idempotency, แคช
-  Auth.gs                  15  ตรวจ PIN ต่อเกม
-  SheetInitializer.gs     119  สร้างชีต ซิงก์แคตตาล็อก โหลดค่าแก้ไข
-  Api.gs                  279  API 31 ตัวที่หน้าเว็บเรียกผ่าน google.script.run
-  Code.gs                  34  doGet() include() เมนูในสเปรดชีต
-  Index.html              229  โครงหน้าจอทั้งหมด
-  CSS.html                268  ธีมกลางคืน มือถือ 360px เป็นหลัก
-  JavaScript.html        1638  ตรรกะฝั่งหน้าเว็บทั้งหมด
-  appsscript.json          15  manifest (V8, Asia/Bangkok)
-
-tests/
-  harness.js              160  โหลดโค้ดเข้า vm sandbox + helper เขียนเทสต์
-  mock-sheets.js          149  Google Sheets จำลอง นับทุกการเรียก API
-  run.js                  968  เทสต์ 77 ข้อ
-
-README.md                 236  คู่มือติดตั้ง deploy และใช้งาน (สำหรับผู้ใช้)
-CLAUDE.md                      ไฟล์นี้ (สำหรับ Claude Code)
+app/
+  page.tsx                     401  จอผู้ดำเนินเกมทั้งหมด (state + routing + เครื่องมือ)
+  layout.tsx / globals.css          ธีมกลางคืน ฟอนต์ Sarabun+Prompt โฮสต์เอง
+  public/[gameId]/page.tsx          จอสาธารณะ
+  admin/page.tsx               271  หน้าแก้บทบาท 46 รายการ + CSV
+  api/
+    command/route.ts                POST ทุก mutation (ตารางคำสั่งอยู่ที่ lib/commands.ts)
+    games/route.ts                  POST สร้างเกม
+    game/[gameId]/route.ts          GET view model ผู้ดำเนินเกม
+    game/[gameId]/{events,summary,validate,players.csv}/
+    public/[gameId]/route.ts        GET view model สาธารณะ (ไม่ต้อง auth)
+    stream/[gameId]/route.ts     78  SSE ส่งเฉพาะเลขเวอร์ชัน
+    auth/{login,logout}/route.ts    ยืนยัน PIN → cookie
+    admin/{login,roles}/route.ts    หน้าแอดมิน
+components/
+  ui.tsx                       174  Loading, PrivacyCover, Toast, Dialog, Modal
+  PublicScreen.tsx              74
+  screens/{Home,Players,Roles,Assign,Night,Day,End}Screen.tsx
+lib/
+  engine/*.gs                 2770  ตรรกะเกม 8 ไฟล์ (ห้ามแก้ ดูข้อ 4)
+  engine.generated.js               build ออกมาจาก 8 ไฟล์ข้างบน ไม่ commit
+  engine.generated.d.ts        155  type ของ engine เขียนมือ
+  types.ts                     284  type ของ state และ view model
+  storage.ts                   352  runCommand, snapshot/undo, event log, idempotency
+  db.ts                         61  pool ต่อ instance
+  catalog.ts                   132  override บทบาทจากตาราง role_overrides
+  auth.ts                      113  PIN → bcrypt + JWT cookie, รหัสผ่านแอดมิน
+  commands.ts                  138  ตารางคำสั่ง 20 ตัว + label + ธง snapshot
+  api.ts                        34  แปลง Error เป็น HTTP status
+  client/{api,useGameStream,variants}.ts
+scripts/
+  build-engine.mjs              72  ต่อ .gs เป็น ES module + การ์ดกัน Apps Script API
+  migrate.mjs / ensure-test-db.mjs / run-tests.mjs
+  smoke-api.mjs                304  เดินเกมจริงผ่าน HTTP ครบทุกคำสั่ง
+  smoke-ui.mjs                 222  เดินเกม 8 คนบน Chromium ขนาดมือถือ
+migrations/001_init.sql
+tests/{engine,storage,publicview}.test.js + helpers.js
 ```
 
 ### ชั้นของสถาปัตยกรรม
 
 ```
-Index/CSS/JavaScript.html   ← หน้าเว็บ (ES5 เท่านั้น)
-        ↓ google.script.run
-Api.gs                      ← ชั้นเดียวที่หน้าเว็บเรียกได้
+app/**/page.tsx + components/    ← หน้าเว็บ (React + TypeScript)
+        ↓ fetch
+app/api/**/route.ts              ← ชั้นเดียวที่หน้าเว็บเรียกได้ (auth อยู่ตรงนี้)
         ↓ runCommand()
-Storage.gs                  ← lock → idempotency → load → version → mutate → persist
+lib/storage.ts                   ← tx → idempotency → FOR UPDATE → version → mutate → persist
         ↓
-RuleEngine / EffectResolver / WinCondition / Validation / RoleCatalog / Utils
-        ↑ ตรรกะบริสุทธิ์ ไม่แตะ Apps Script API เลย ← จุดนี้สำคัญมาก
-        ↓
-GameService.gs              ← แปลง state เป็น view model
+lib/engine/*.gs                  ← ตรรกะบริสุทธิ์ ไม่แตะฐานข้อมูล ไม่แตะ network
 ```
-
-**ไฟล์ 8 ตัวในกรอบ "ตรรกะบริสุทธิ์" ห้ามเรียก `SpreadsheetApp` / `CacheService` /
-`PropertiesService` / `LockService` เด็ดขาด** เพราะชุดทดสอบโหลดไฟล์เหล่านี้เข้า
-Node sandbox โดยตรง ถ้าใส่เข้าไปเทสต์จะพังทันที และจะเสียความสามารถในการทดสอบเร็ว
 
 ---
 
-## 4. ข้อตกลงในการเขียนโค้ด
+## 4. กฎเหล็ก: ห้ามแก้ไฟล์ใน `lib/engine/`
 
-### ฝั่งเซิร์ฟเวอร์ (`.gs`)
+`Config.gs` `RoleCatalog.gs` `Utils.gs` `Validation.gs` `WinConditionService.gs`
+`EffectResolver.gs` `RuleEngine.gs` `GameService.gs`
 
-- ใช้ `var` ล้วน ไม่ใช้ `const` / `let` / arrow function / template literal
-- โยน `Error` พร้อมข้อความภาษาไทยที่ผู้ใช้อ่านรู้เรื่อง
-- ฟังก์ชันลงท้ายด้วย `_` = ภายในไฟล์ ไม่ใช่ API สาธารณะ
-- ทุก mutation ต้องผ่าน `runCommand()` ใน `Storage.gs` ห้ามเขียนชีตตรง ๆ
+ไฟล์เหล่านี้ผ่านเทสต์ 69 ข้อมาตั้งแต่ยุค Apps Script และเป็นสินทรัพย์ที่มีค่าที่สุดในโปรเจกต์
+มันใช้ `var` อยู่ใน global scope เดียวกัน เรียกข้ามไฟล์กันหลายร้อยจุด
+`scripts/build-engine.mjs` จึง **ต่อไฟล์ทั้งหมดเข้าด้วยกันแล้วเติม `export` ท้ายไฟล์**
+แทนการไล่ใส่ `import`/`export` ทีละไฟล์
+
+- นามสกุล `.gs` คงไว้โดยตั้งใจ เพื่อให้เห็นชัดว่าไฟล์กลุ่มนี้เล่นคนละกติกากับที่เหลือ
+- สคริปต์ build มีการ์ดตรวจ `SpreadsheetApp` / `CacheService` / `PropertiesService` / `LockService`
+  ถ้าใครเผลอใส่กลับเข้าไป build จะพังทันทีพร้อมข้อความภาษาไทย
+- ถ้าจะแก้กติกาจริง ๆ ให้แก้พร้อมเทสต์ในไฟล์ `tests/engine.test.js` เสมอ
+- เพิ่ม export ใหม่ต้องแก้ทั้ง `EXPORTS` ใน `scripts/build-engine.mjs`
+  และ `lib/engine.generated.d.ts` (สคริปต์ตรวจให้ว่าชื่อมีจริง)
+
+---
+
+## 5. ข้อตกลงในการเขียนโค้ด
+
+### ฝั่งเซิร์ฟเวอร์ (`lib/*.ts`, `app/api/**`)
+
+- TypeScript เต็มรูปแบบ แต่ **import ภายใน `lib/` ต้องใส่นามสกุล `.ts`**
+  เพราะชั้นเทสต์รันไฟล์เหล่านี้ด้วย Node ตรง ๆ (Node ลบ type ให้เอง ไม่ผ่าน bundler)
+- ห้ามใช้ `enum` หรือ namespace (Node strip-types ไม่รองรับ)
+- โยน `Error` พร้อมข้อความภาษาไทยที่ผู้ใช้อ่านรู้เรื่อง — `lib/api.ts` ส่งข้อความนั้นออกไปตรง ๆ
+- ทุก mutation ต้องผ่าน `runCommand()` ใน `lib/storage.ts` ห้ามเขียนตาราง `games` เอง
 - คอมเมนต์อธิบาย **"ทำไม"** ไม่ใช่ "ทำอะไร" และเขียนเป็นภาษาอังกฤษ
 
 ### ฝั่งหน้าเว็บ
 
-- **ES5 เท่านั้น** — `var` ล้วน ไม่มี arrow function, template literal, `const`, `let`
-  (มีสคริปต์ตรวจในข้อ 8 ใช้ตรวจก่อน commit ทุกครั้ง)
-- ห้ามใช้ `localStorage` เก็บข้อมูลสำคัญโดยไม่ครอบ `try/catch`
-- ห้ามใส่ Game ID หรือ PIN ลงใน URL
-- เรียกเซิร์ฟเวอร์ผ่าน `call()` หรือ `google.script.run` พร้อม `withFailureHandler` เสมอ
-- ทุกคำสั่งต้องแนบ `expectedVersion` และ `idempotencyKey` ผ่าน helper `cmd()`
-
-### CDN ที่ใช้
-
-Bootstrap 5.3, Bootstrap Icons, SweetAlert2, ฟอนต์ Sarabun + Prompt
+- ข้อจำกัด ES5 หมดไปแล้ว ใช้ TypeScript + React 19 ได้เต็มที่
+- ห้ามใช้ `localStorage` โดยไม่ครอบ `try/catch` (โหมดส่วนตัวบน iOS โยน error)
+- **ห้ามใส่ Game ID หรือ PIN ลงใน URL** ของจอผู้ดำเนินเกม (จอสาธารณะใช้ gameId ใน path ได้ เพราะไม่มีความลับ)
+- ทุกคำสั่งต้องแนบ `expectedVersion` และ `idempotencyKey` ผ่าน `sendCommand()`
+- ไม่พึ่ง CDN — ฟอนต์โฮสต์เอง ไม่มี Bootstrap/SweetAlert2 แล้ว (`components/ui.tsx` แทน)
 
 ---
 
-## 5. แนวคิดหลักของ engine
+## 6. แนวคิดหลักของ engine
 
 ### state machine
 
@@ -157,11 +177,11 @@ vampire immunity → bodyguard → cursed convert → tough_guy delay → blessi
 `DEAD_PLAYER`
 
 การเพิ่ม targetRule ใหม่ต้องแก้ **3 จุด**: `Validation.gs` (ตรวจ),
-`RuleEngine.buildNightSteps()` (สร้างขั้นตอน), `JavaScript.html` → `targetsUi()` (ปุ่มเลือก)
+`RuleEngine.buildNightSteps()` (สร้างขั้นตอน), `components/screens/NightScreen.tsx` → `TargetGrid` (ปุ่มเลือก)
 
 ---
 
-## 6. การตัดสินใจที่ผ่านมา — อย่ารื้อโดยไม่ถาม
+## 7. การตัดสินใจที่ผ่านมา — อย่ารื้อโดยไม่ถาม
 
 ### การตีความกติกาที่คลุมเครือ
 
@@ -175,7 +195,6 @@ vampire immunity → bodyguard → cursed convert → tough_guy delay → blessi
 ### ตัวเลือกที่จงใจถอดออก
 
 - **`minionMode`** — เป็นการตัดสินใจตอนจัดสำรับ ไม่ใช่ตรรกะในเกม
-  ถ้าเล่นกติกาให้หมาป่าเลือกสมุนภายหลัง ให้เอาการ์ดออกจากสำรับแล้วแตะไหล่แทน
 - **`cupidMode: TAKES_LEFTOVER_ROLE`** — ระบบไม่ได้เก็บข้อมูลการ์ดที่เหลือในกล่อง
 
 **หลักการ**: ถ้าจะเพิ่มตัวเลือกกติกาใหม่ ต้องเขียนโค้ดรองรับ**และ**เทสต์คุมพร้อมกัน
@@ -184,159 +203,142 @@ vampire immunity → bodyguard → cursed convert → tough_guy delay → blessi
 ### ค่า Village Impact ยังไม่ยืนยัน ⚠️
 
 ค่า `villageImpact` ทั้ง 46 บทบาท **เป็นค่าประมาณ ไม่ได้ถอดจากการ์ดจริง**
-`VILLAGE_IMPACT_VERIFIED = false` และหน้าเว็บขึ้นคำเตือนกำกับตัวเลขสมดุลเสมอ
-ผู้ใช้แก้เองได้ที่ชีต `RoleCatalog` แล้วกดปุ่มโหลดใหม่ — **อย่าลบคำเตือนนี้จนกว่าจะได้รับการยืนยัน**
+`VILLAGE_IMPACT_VERIFIED = false` ใน `RoleCatalog.gs` และหน้าเว็บขึ้นคำเตือนกำกับตัวเลขสมดุลเสมอ
+
+ผู้ใช้แก้เองได้ที่ `/admin` เมื่อแก้ครบแล้วให้ตั้ง env `VILLAGE_IMPACT_VERIFIED=true`
+(ทำแบบนี้เพื่อไม่ต้องแตะไฟล์ตรรกะ) — **อย่าลบคำเตือนนี้ด้วยวิธีอื่น**
+
+### สิ่งที่ระบบไม่มีอีกแล้วหลังย้าย
+
+- การแตก state JSON เป็นชิ้น (`_chunk`) — `jsonb` ไม่มีขีดจำกัด 50,000 ตัวอักษร
+- ตาราง `Players` ใน Google Sheets — แทนด้วยดาวน์โหลด CSV
+- แคชเลขแถวของเกม — Postgres มี primary key อยู่แล้ว
+- `LockService` ระดับทั้งสคริปต์ — แทนด้วย `SELECT ... FOR UPDATE` ต่อเกม
+  (แก้ปัญหา "สองโต๊ะบล็อกกันเอง" ที่ค้างมาจากยุค Apps Script)
 
 ---
 
-## 7. เรื่องประสิทธิภาพ (สำคัญ อ่านก่อนแก้ Storage.gs)
+## 8. เรื่องประสิทธิภาพ
 
-Apps Script ตอบสนองต่อการเรียกหนึ่งครั้งราว 0.6–2 วินาทีเสมอ แก้ที่โค้ดไม่ได้
-สิ่งเดียวที่ทำได้คือ **ลดจำนวนครั้งที่แตะ Google Sheets**
+Vercel + Neon ตอบสนองราว 50–300 ms ต่อคำสั่ง (เทียบกับ 0.6–2 วินาทีบน Apps Script)
+คอขวดที่เหลือมีสองจุดเท่านั้น
 
-### ผลที่วัดได้จริง (คำสั่งธรรมดา 1 ครั้ง โต๊ะ 12 คน)
+### 1. cold start / auto-suspend
 
-| ปฏิบัติการ | เดิม | ปัจจุบัน |
-|---|---|---|
-| `openById()` | 3 | **1** |
-| `deleteRow()` ทีละแถว | 12 | **0** |
-| อ่านคอลัมน์ทั้งคอลัมน์ | 4 | **1** |
-| **รวม** | **28** | **8** |
+Neon free tier พักการทำงานเมื่อไม่มีคนใช้ คำสั่งแรกหลังพักช้าได้ 1–2 วินาที
+**ยอมรับได้** อย่าแก้ด้วยการ ping ถี่ ๆ เพราะจะกินโควตาเปล่า ๆ
 
-จอสาธารณะ 1 รอบ poll: 9 → 5
+### 2. จำนวน round trip ต่อคำสั่ง
+
+`runCommand()` ใช้ transaction เดียวจบ: idempotency → `SELECT ... FOR UPDATE` →
+snapshot (เฉพาะคำสั่งสำคัญ) → `UPDATE` → `INSERT events` → `INSERT idempotency`
+**อย่าแยกเป็นหลาย transaction** เพราะจะเสียการรับประกันเรื่องคำสั่งชนกัน
 
 ### กติกาที่ต้องรักษาไว้
 
-1. **ห้ามใช้ `deleteRow()` ในลูป** — ใช้ `deleteRows(start, count)` ครั้งเดียว
-   (`deleteRow` เป็นการเปลี่ยนโครงสร้างชีต ช้าที่สุดในบรรดาปฏิบัติการทั้งหมด)
-2. **ห้ามเรียก `getSpreadsheet()` แล้วคาดว่าจะถูก** — มัน memoize ไว้แล้วใน `_ssHandle`
-   ถ้าเปลี่ยน `SPREADSHEET_ID` ต้องเรียก `resetStorageHandles_()`
-3. **ตาราง `Players` ไม่ถูกเขียนระหว่างเล่น** — เขียนเฉพาะตอนจบเกมกับตอน
-   `apiExportPlayerTable()` เพราะไม่มีโค้ดส่วนไหนอ่านมันเลย
-   ถ้าจะเขียนโค้ดที่ **อ่าน** ตารางนี้ ต้องรื้อการตัดสินใจนี้ก่อน
-4. **แคตตาล็อกบทบาทแคช 6 ชั่วโมง** ผ่าน `ensureCatalogLoaded_()`
-   ใช้ `loadCatalogOverrides()` เมื่อต้องการบังคับอ่านชีตใหม่เท่านั้น
-5. **เลขแถวของเกมแคชไว้ใน CacheService** แต่ `_findGameRow()` ตรวจกับชีตก่อนใช้เสมอ
-   ถ้าไม่ตรงจะกลับไปสแกนเต็ม — **ห้ามตัดขั้นตอนตรวจสอบนี้ออก** เสี่ยงเขียนทับเกมอื่น
-
-### วิธีวัดผล
-
-`tests/mock-sheets.js` นับทุกการเรียก API ใช้เทียบก่อน/หลังได้จริง
-ตัวเลขในตารางข้างบนถูกล็อกเป็นเทสต์แล้ว ถ้าใครเผลอใส่ `deleteRow` กลับเข้าไปเทสต์จะแดงทันที
+1. **แคตตาล็อกบทบาทแคชในหน่วยความจำ 6 ชั่วโมงต่อ instance** (`lib/catalog.ts`)
+   Vercel เป็น serverless — ตัวแปรระดับโมดูลอยู่ได้แค่ช่วงที่ instance ยังอุ่น
+   **ห้ามใช้เป็นแหล่งความจริง** ใช้เป็นแค่ชั้นแคช
+2. `applyCatalogOverrides()` เขียนทับ role definition ในหน่วยความจำโดยตรง
+   `lib/catalog.ts` จึงเก็บค่าเริ่มต้นไว้ตั้งแต่โหลดแล้วคืนค่าก่อน apply ชุดใหม่เสมอ
+   **ห้ามตัดขั้นตอนนี้ออก** ไม่งั้น instance ที่อุ่นอยู่จะจำค่าที่แอดมินลบไปแล้ว
+3. **snapshot เก็บ 25 จุดต่อเกม** ตัดด้วย `DELETE ... NOT IN (... LIMIT 25)` คำสั่งเดียว
+4. pool ของ `pg` เก็บไว้บน `globalThis` — ห้ามสร้าง pool ใหม่ต่อ request
+5. SSE ส่งเฉพาะเลขเวอร์ชัน ไคลเอนต์ค่อยดึง view model ที่ตัวเองมีสิทธิ์
+   **ห้ามส่ง view model ผ่านสตรีม** เพราะ route เดียวกันถูกใช้ทั้งจอสาธารณะและจอผู้ดำเนินเกม
 
 ---
 
-## 8. ชุดทดสอบ
+## 9. ชุดทดสอบ
 
 ```bash
-node tests/run.js        # ต้องได้ ผ่าน 77 / ล้มเหลว 0
+npm test              # ต้องได้ ผ่าน 80 / ล้มเหลว 0
+npm run test:engine   # เฉพาะตรรกะเกม ไม่ต้องมีฐานข้อมูล
 ```
 
-### หมวดของเทสต์
-
-| หมวด | จำนวน | คุมอะไร |
+| ไฟล์ | จำนวน | คุมอะไร |
 |---|---|---|
-| `unit` | 13 | ฟังก์ชันย่อย ลำดับปลุก การตรวจเป้าหมาย |
-| `scenario` | 33 | สถานการณ์เต็มเกมตามสเปกข้อ 15.2 (ข้อ 23 แตกเป็น 3 กรณี) |
-| `extra` | 14 | บทบาทชุดขยาย view model กติกาคะแนนเสมอ |
-| ตัวเลือกกติกา | 9 | ตัวเลือกทุกตัวที่ปรับได้ต้องมีผลจริง |
-| ชั้นจัดเก็บข้อมูล | 8 | บันทึก/อ่าน แคช เวอร์ชัน idempotency **และตัวเลขประสิทธิภาพ** |
+| `tests/engine.test.js` | 69 | ตรรกะเกมทั้งหมด ยกมาจากยุค Apps Script ไม่แก้แม้แต่ข้อเดียว |
+| `tests/storage.test.js` | 8 | idempotency, เวอร์ชันซ้อนทับ, snapshot/undo, trim 25, สองเกมไม่ปนกัน, **คำสั่งพร้อมกันต้องมีตัวหนึ่งแพ้** |
+| `tests/publicview.test.js` | 3 | จอสาธารณะห้ามรั่วบทบาทของคนเป็น ทุกช่วงของเกม |
 
-### สองโหมดของ harness
+เทสต์ชั้นจัดเก็บข้อมูลรันบน **Postgres จริง** ไม่ใช่ของจำลอง เพราะของจำลองไม่รู้จัก
+`SELECT ... FOR UPDATE` ซึ่งเป็นสิ่งที่เทสต์กลุ่มนี้ตั้งใจพิสูจน์
+`scripts/run-tests.mjs` จะเปิดคลัสเตอร์ในเครื่องให้เองถ้าไม่ได้ตั้ง `DATABASE_URL`
 
-```js
-const E = H.loadEngine();  // ตรรกะบริสุทธิ์ 8 ไฟล์ เร็วมาก ไม่ต้อง mock
-const F = H.loadFull();    // + Auth/Storage/SheetInitializer/Api พร้อม Sheets จำลอง
+### สคริปต์เดินเกมจริง (ต้องมีเซิร์ฟเวอร์รันอยู่)
+
+```bash
+npm run build && npm start &
+npm run smoke      # ยิง API ครบทุกคำสั่ง 22 ตัว + SSE + หน้าแอดมิน (35 ข้อ)
+npm run smoke:ui   # Chromium 360px เดินเกม 8 คนจนประกาศผู้ชนะ (21 ข้อ)
 ```
 
-`loadFull()` แถม `F.__env.counts` (นับการเรียก API) และ `F.__env.sheets` (ดูข้อมูลในชีต)
+`smoke-ui` ต้องมี Chromium ถ้าเครื่องมี build ที่ไม่ตรงกับแพ็กเกจ ให้ชี้ด้วย
+`PW_CHROMIUM=/path/to/chrome`
 
 ### ตรวจก่อน commit ทุกครั้ง
 
 ```bash
-# ไวยากรณ์ .gs (node ไม่รู้จักนามสกุล .gs จึงต้องคัดลอกเป็น .js ก่อน)
-mkdir -p /tmp/chk && for f in src/*.gs; do cp "$f" "/tmp/chk/$(basename ${f%.gs}).js"; done
-for f in /tmp/chk/*.js; do node --check "$f" || echo "ERROR $f"; done
-
-# ไวยากรณ์ + ES5 ฝั่งหน้าเว็บ (ต้องไม่มีผลลัพธ์ออกมา)
-sed 's/<script>//;s|</script>||' src/JavaScript.html > /tmp/c.js
-node --check /tmp/c.js && grep -nE "=>|\`|\b(const|let) " /tmp/c.js
-
-# การอ้างอิงข้ามไฟล์ (ต้องไม่มีผลลัพธ์ออกมา)
-cd src
-for f in $(grep -oE 'on(click|input|change)="[a-zA-Z_]+\(' Index.html | sed 's/.*"//;s/(//' | sort -u); do
-  grep -q "function $f" JavaScript.html || echo "MISSING FN: $f"; done
-for a in $(grep -oE "'api[A-Za-z]+'" JavaScript.html | tr -d "'" | sort -u); do
-  grep -q "function $a" Api.gs || echo "MISSING API: $a"; done
-for f in $(grep -o "^function api[A-Za-z]*" Api.gs | sed 's/function //'); do
-  grep -q "$f" JavaScript.html || echo "UNUSED API: $f"; done
+npm run build:engine     # การ์ดกัน Apps Script API + ตรวจรายชื่อ export
+npx tsc --noEmit         # type ทั้งโปรเจกต์
+npm test                 # 80/80
 ```
 
 ---
 
-## 9. งานที่ยังไม่ได้ทำ
+## 10. งานที่ยังไม่ได้ทำ
 
-### ระยะที่ 2 — ประสิทธิภาพ (ตกลงกันไว้แล้ว ยังไม่ลงมือ)
-
-1. `takeSnapshot()` แปลง state เป็น JSON ซ้ำอีกรอบทั้งที่ `persistGame()` เพิ่งทำไป — ใช้ผลเดิมซ้ำ
-2. `trimSnapshots_()` ยังลบทีละแถว → เปลี่ยนเป็น `deleteRows` ช่วงเดียว และตัดแต่งทุก 10 ครั้งพอ
-3. เก็บ snapshot ล่าสุดใน CacheService ให้ปุ่มย้อนกลับเร็วขึ้น (ชีตเป็นตัวสำรอง)
-
-### ระยะที่ 3 — ต้องตัดสินใจก่อน
-
-4. `withGameLock()` ใช้ `LockService.getScriptLock()` ซึ่งเป็นล็อกระดับทั้งสคริปต์
-   **เปิดเล่นพร้อมกันสองโต๊ะจะบล็อกกันเองแม้เป็นคนละเกม**
-   แก้ได้แต่ต้องเขียน mutex ต่อเกมเอง ซึ่งเสี่ยงกว่าเดิม — เจ้าของโปรเจกต์เลือกคงไว้แบบปลอดภัยก่อน
-
-### คำถามที่ต้องยืนยันกับเจ้าของกล่องเกม
+### ต้องยืนยันกับเจ้าของกล่องเกม (ไม่ใช่งานของ Claude Code)
 
 1. ค่า Village Impact จริงของทั้ง 46 บทบาท (สำคัญที่สุด)
-2. Wolfpack และ Hunting Party ในกล่องมีบทบาทใดบ้าง (ปิดตัวที่ไม่มีด้วยคอลัมน์ `enabled`)
+2. Wolfpack และ Hunting Party ในกล่องมีบทบาทใดบ้าง (ปิดตัวที่ไม่มีที่ `/admin`)
 3. Vampire เล่นร่วมกับหมาป่า หรือเล่นแทน (ตอนนี้ `vampireEnabled: false`)
 4. การเปิดเผยบทบาทเมื่อตาย ใช้แบบไหน
 5. กติกาเมื่อคะแนนเสมอ ใช้แบบไหน
 6. แม่มดมีขวดยากี่ขวด ใช้ได้กี่ครั้ง
 7. สมุนหมาป่าแจกเป็นการ์ดหรือให้หมาป่าเลือกภายหลัง
 
+### ไอเดียที่ยังไม่ทำ (ไม่เร่ง)
+
+- `LISTEN`/`NOTIFY` แทนการ poll เวอร์ชันในสตรีม — ตอนนี้ poll ทุก 1.2 วินาที
+  ซึ่งเบามากสำหรับผู้ใช้หลักสิบ และทนการที่ instance หายไปได้ดีกว่า
+- ปิดปุ่มเป้าหมายที่กติกาห้ามซ้ำสองคืนติด (ตอนนี้กดได้แล้วเซิร์ฟเวอร์ปฏิเสธพร้อมเหตุผล)
+- หน้าสรุปสถิติข้ามเกม
+
 ---
 
-## 10. คำสั่งที่ใช้บ่อย
+## 11. คำสั่งที่ใช้บ่อย
 
 ```bash
-node tests/run.js                 # รันเทสต์ทั้งหมด
+npm run dev            # http://localhost:3000
+npm test               # 80/80
+npm run db:migrate     # ใช้ migration ที่ยังไม่ได้รัน
+npm run smoke          # เดินเกมผ่าน HTTP (ต้องมีเซิร์ฟเวอร์)
+npm run smoke:ui       # เดินเกมบนเบราว์เซอร์ (ต้องมีเซิร์ฟเวอร์)
 ```
-
-### ติดตั้งบน Apps Script
-
-1. สร้างโปรเจกต์ที่ script.google.com วางไฟล์ `.gs` 13 ไฟล์
-   + HTML 3 ไฟล์ (ตั้งชื่อ `Index`, `CSS`, `JavaScript` — ห้ามใส่นามสกุล)
-   + เปิด manifest ใน Project Settings แล้ววาง `appsscript.json`
-2. รันฟังก์ชัน `createSpreadsheetAndBind` หนึ่งครั้ง
-   (สร้างสเปรดชีต ตั้ง `SPREADSHEET_ID` สร้างแท็บทั้ง 6 ให้เอง)
-3. Deploy → New deployment → Web app → Execute as **Me** / Access **Anyone**
-
-**ระหว่างพัฒนา** ใช้ Deploy → Test deployments (สะท้อนโค้ดล่าสุดทันที)
-**rollback**: Manage deployments → ดินสอ → เลือก Version เดิม → Deploy
-
-### แท็บในสเปรดชีต
-
-`Games` (state JSON แตกเป็นชิ้นกัน limit 50,000 ตัวอักษร/ช่อง) `Players` (อ่านอย่างเดียว
-เขียนตอนจบเกม) `Events` (append-only) `Snapshots` (เก็บ 25 จุดสำหรับ undo)
-`RoleCatalog` (**ผู้ใช้แก้เองได้**) `Settings`
 
 ### URL
 
-- จอผู้ดำเนินเกม: Web app URL ตรง ๆ (มี PIN 4 หลักต่อเกม)
-- จอสาธารณะ: `<URL>?mode=public&g=<GAME_ID>`
+- จอผู้ดำเนินเกม: `/` (ใส่ PIN ครั้งเดียวต่ออุปกรณ์ แล้วจำด้วย cookie 12 ชั่วโมง)
+- จอสาธารณะ: `/public/<GAME_ID>`
+- หน้าผู้ดูแลบทบาท: `/admin`
+
+### ตารางในฐานข้อมูล
+
+`games` (state เป็น jsonb) `events` (append-only) `snapshots` (25 จุดต่อเกม สำหรับ undo)
+`role_overrides` (**ผู้ดูแลแก้เองได้ที่ /admin**) `idempotency` `schema_migrations`
 
 ---
 
-## 11. สิ่งที่ทำให้โปรเจกต์นี้พังได้ง่ายที่สุด
+## 12. สิ่งที่ทำให้โปรเจกต์นี้พังได้ง่ายที่สุด
 
-1. ใส่ `SpreadsheetApp` หรือ service อื่นของ Apps Script ลงในไฟล์ตรรกะบริสุทธิ์ 8 ไฟล์ → เทสต์พังทันที
-2. ใช้ arrow function หรือ template literal ในไฟล์ฝั่งหน้าเว็บ → รันบนมือถือบางรุ่นไม่ได้
-3. ใส่ `deleteRow()` ในลูปกลับเข้าไป → ช้าลง 2–4 วินาทีต่อคำสั่ง
+1. แก้ไฟล์ใน `lib/engine/` → เสียการรับประกันจากเทสต์ 69 ข้อที่สะสมมา
+2. ใส่ service ของ Apps Script กลับเข้าไฟล์ตรรกะ → `npm run build:engine` พังทันที (ตั้งใจให้พัง)
+3. ลืมใส่นามสกุล `.ts` ในการ import ภายใน `lib/` → เทสต์รันไม่ได้ (แต่ Next build ผ่าน)
 4. เพิ่มตัวเลือกกติกาแต่ไม่เขียนโค้ดรองรับ → ปุ่มที่กดแล้วไม่เกิดอะไรขึ้น (เคยมี 8 ปุ่ม)
 5. ทำให้จอสาธารณะเห็นบทบาทของคนที่ยังมีชีวิต → ทำลายเกมทั้งกระดาน
-6. ลบ guard 300 รอบในคิวการตาย → ลูปไม่สิ้นสุด สคริปต์ timeout
+6. ลบ guard 300 รอบในคิวการตาย → ลูปไม่สิ้นสุด ฟังก์ชัน timeout
 7. แก้ลำดับการปลุกด้วยการ hard-code แทนการแก้ `wakePriority`
+8. แยก `runCommand()` ออกเป็นหลาย transaction → คำสั่งสองคำสั่งพร้อมกันเขียนทับกันได้
+9. พึ่งตัวแปรระดับโมดูลเป็นแหล่งความจริงบน Vercel → ค่าหายเมื่อ instance ถูกรีไซเคิล

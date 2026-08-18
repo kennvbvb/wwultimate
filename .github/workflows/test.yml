@@ -1,0 +1,42 @@
+name: tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # The storage tests run against a real Postgres — an in-memory stand-in
+    # ignores SELECT ... FOR UPDATE, which is what half of them are there to prove.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: uw
+          POSTGRES_PASSWORD: uw
+          POSTGRES_DB: uw_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U uw"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://uw:uw@127.0.0.1:5432/uw_test
+      AUTH_SECRET: ci-secret-not-used-in-production
+      ADMIN_PASSWORD: ci-admin
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npx tsc --noEmit
+      - run: npm run build

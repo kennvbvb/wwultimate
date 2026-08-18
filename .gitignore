@@ -6,3 +6,4 @@ node_modules/
 .vercel/
 lib/engine.generated.js
 .DS_Store
+tsconfig.tsbuildinfo
