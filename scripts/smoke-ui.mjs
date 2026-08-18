@@ -114,15 +114,19 @@ try {
   }
   ok(guard < 30, 'เดินครบทุกขั้นตอนกลางคืน (' + guard + ' ขั้น)');
   await page.click('button:has-text("สรุปผลกลางคืน")');
+  await page.waitForTimeout(600);
+
+  /* a death can fire a trigger — the hunter shoots before the day opens */
+  let prompts = 0;
+  while (await page.locator('button:has-text("ยิงขึ้นฟ้า")').count()) {
+    await page.click('button:has-text("ยิงขึ้นฟ้า")');
+    await page.waitForTimeout(500);
+    if (++prompts > 5) break;
+  }
   await page.waitForSelector('text=รุ่งเช้าวันที่');
   await shot('dawn');
-
-  /* the hunter may need to shoot before the day opens */
-  if (await page.locator('button:has-text("ยิงขึ้นฟ้า")').count()) {
-    await page.click('button:has-text("ยิงขึ้นฟ้า")');
-    await page.waitForTimeout(400);
-  }
-  ok(await page.locator('text=รุ่งเช้าวันที่ 1').isVisible(), 'ถึงรุ่งเช้าวันที่ 1');
+  ok(await page.locator('text=รุ่งเช้าวันที่ 1').isVisible(),
+     'ถึงรุ่งเช้าวันที่ 1' + (prompts ? ' (หลังตอบทริกเกอร์ ' + prompts + ' ครั้ง)' : ''));
 
   /* ---- public display must not leak ---- */
   const pub = await browser.newPage({ viewport: { width: 1280, height: 720 } });
