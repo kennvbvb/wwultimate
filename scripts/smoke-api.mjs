@@ -266,4 +266,39 @@ const { listCommands } = await import('../lib/commands.ts');
 const missing = listCommands().filter((c) => !used.has(c));
 ok(missing.length === 0, 'ยิงครบทุกคำสั่ง (' + used.size + ' คำสั่ง)' + (missing.length ? ' ขาด: ' + missing : ''));
 
+/* ---- admin: edit a role, then confirm a new game sees the change ---- */
+const adminCookieBefore = cookie;
+cookie = '';
+const noAuth = await call('/api/admin/roles');
+ok(noAuth.status === 401, 'หน้าแอดมินต้องใส่รหัสผ่านก่อน');
+
+const badLogin = await call('/api/admin/login', { method: 'POST', body: JSON.stringify({ password: 'wrong' }) });
+ok(badLogin.status === 401, 'รหัสผ่านผู้ดูแลผิดเข้าไม่ได้');
+
+const adminLogin = await call('/api/admin/login', {
+  method: 'POST', body: JSON.stringify({ password: process.env.ADMIN_PASSWORD || 'admin1234' })
+});
+ok(adminLogin.status === 200, 'รหัสผ่านผู้ดูแลถูกต้องเข้าได้');
+
+const before = await call('/api/admin/roles');
+ok(before.status === 200 && before.body.roles.length === 46, 'หน้าแอดมินเห็นบทบาทครบ 46');
+
+const put = await call('/api/admin/roles', {
+  method: 'PUT',
+  body: JSON.stringify({ rows: [{ roleId: 'villager', displayNameTh: 'ชาวบ้านทดสอบ', villageImpact: 3, maxCopies: 20, enabled: true, noteTh: 'แก้จากหน้าแอดมิน' }] })
+});
+ok(put.status === 200 && put.body.saved === 1, 'บันทึกค่าที่แก้ได้');
+
+const afterBoot = await call('/api/bootstrap');
+const villager = afterBoot.body.catalog.roles.find((r) => r.roleId === 'villager');
+ok(villager.th === 'ชาวบ้านทดสอบ' && villager.villageImpact === 3,
+   'เกมที่สร้างหลังจากนี้เห็นค่าใหม่ทันที (ไม่ต้องรอแคชหมดอายุ)');
+
+const del = await call('/api/admin/roles', { method: 'DELETE' });
+ok(del.status === 200, 'คืนค่าเริ่มต้นได้');
+const restored = await call('/api/bootstrap');
+ok(restored.body.catalog.roles.find((r) => r.roleId === 'villager').th === 'ชาวบ้าน',
+   'ค่ากลับไปเป็นค่าเริ่มต้นจริง');
+cookie = adminCookieBefore;
+
 console.log('\nผ่านการตรวจ ' + checks + ' ข้อ');

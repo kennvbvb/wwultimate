@@ -82,9 +82,23 @@ export function invalidateCatalogCache(): void {
   globalForCatalog.__uwCatalog = undefined;
 }
 
+/**
+ * Whether the villageImpact numbers have been checked against the printed cards.
+ *
+ * The engine ships `false` and that file is off limits during the migration, so
+ * the flag is flipped with an environment variable once an admin has corrected
+ * all 46 rows (MIGRATION.md §7). Until then every balance figure carries a
+ * warning, which is the whole point.
+ */
+export function impactVerified(): boolean {
+  return E.VILLAGE_IMPACT_VERIFIED || process.env.VILLAGE_IMPACT_VERIFIED === 'true';
+}
+
 export async function catalogPayload(): Promise<CatalogViewModel> {
   await ensureCatalogLoaded();
-  return E.catalogViewModel();
+  const payload = E.catalogViewModel();
+  payload.impactVerified = impactVerified();
+  return payload;
 }
 
 export async function saveOverrides(rows: RoleOverrideRow[]): Promise<number> {

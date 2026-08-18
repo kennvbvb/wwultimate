@@ -206,6 +206,16 @@ try {
   await page.click('#cover');
   ok(!(await page.locator('#cover.show').count()), 'แตะแล้วกลับมาแสดงผลได้');
 
+  /* ---- admin screen ---- */
+  const admin = await browser.newPage({ viewport: { width: 360, height: 780 } });
+  await admin.goto(BASE + '/admin', { waitUntil: 'networkidle' });
+  ok(await admin.locator('text=หน้าผู้ดูแลบทบาท').isVisible(), 'หน้าแอดมินขอรหัสผ่านก่อน');
+  await admin.fill('input[type="password"]', process.env.ADMIN_PASSWORD || 'admin1234');
+  await admin.click('button:has-text("เข้าสู่ระบบ")');
+  await admin.waitForSelector('text=แก้ค่าบทบาท');
+  ok((await admin.locator('.card2').count()) > 40, 'หน้าแอดมินแสดงบทบาททั้ง 46 รายการ');
+  if (SHOTS) await admin.screenshot({ path: SHOT_DIR + '/91-admin.png' });
+
   console.log('\nผ่านการตรวจ ' + checks + ' ข้อ' + (SHOTS ? ' (ภาพอยู่ที่ ' + SHOT_DIR + ')' : ''));
 } finally {
   await browser.close();
