@@ -104,11 +104,19 @@ try {
 
   /* ---- night 1 ---- */
   let guard = 0;
+  let lastGuarded = '';
   while (await page.locator('.step-card .step-role').count() && guard++ < 30) {
     const title = (await page.locator('.step-role').textContent()).trim();
     if (title === 'ครบทุกขั้นตอนแล้ว') break;
     const enabled = await page.locator('.tgt:not(.dis)').all();
-    if (enabled.length) await enabled[Math.floor(Math.random() * enabled.length)].click();
+    let picked = null;
+    if (enabled.length) {
+      picked = enabled[Math.floor(Math.random() * enabled.length)];
+      await picked.click();
+    }
+    if (title.includes('ผู้คุ้มกัน') && picked) {
+      lastGuarded = (await picked.textContent()).split('ที่นั่ง')[0].trim();
+    }
     await page.click('.step-card button:has-text("บันทึก")');
     await page.waitForTimeout(250);
   }
@@ -164,6 +172,7 @@ try {
   await shot('after-vote');
 
   /* ---- run the game to its end ---- */
+  let checkedGuardHint = false;
   guard = 0;
   while (guard++ < 200) {
     const sub = await page.locator('.tb-sub').textContent();
@@ -175,13 +184,33 @@ try {
     } else if (await page.locator('button:has-text("สรุปผลกลางคืน")').count()) {
       await page.click('button:has-text("สรุปผลกลางคืน")');
     } else if (await page.locator('.step-card .step-role').count()) {
-      if (process.env.DEBUG === '1') {
-        console.log('  step: ' + (await page.locator('.step-role').textContent()));
+      const stepTitle = (await page.locator('.step-role').textContent()).trim();
+      if (process.env.DEBUG === '1') console.log('  step: ' + stepTitle);
+
+      /* The Bodyguard may not guard the same player two nights running, and the
+       * screen has to say so before the tap, not after the server refuses.
+       * Only checked when that player is still alive — a dead one is greyed out
+       * for the more obvious reason. */
+      if (stepTitle.includes('ผู้คุ้มกัน') && lastGuarded && !checkedGuardHint) {
+        const repeat = page.locator('.tgt', { hasText: lastGuarded }).first();
+        const text = await repeat.textContent();
+        if (text.includes('สองคืนติดกันไม่ได้')) {
+          const cls = (await repeat.getAttribute('class')) || '';
+          ok(cls.includes('dis'),
+             'ปุ่มของคนที่คุ้มกันไปเมื่อคืน (' + lastGuarded + ') ถูกปิดพร้อมบอกเหตุผล');
+          checkedGuardHint = true;
+        }
       }
       /* random rather than fixed: some roles refuse the same target two nights
        * running, and the app is right to reject a repeat. */
       const enabled = await page.locator('.tgt:not(.dis)').all();
-      if (enabled.length) await enabled[Math.floor(Math.random() * enabled.length)].click();
+      if (enabled.length) {
+        const choice = enabled[Math.floor(Math.random() * enabled.length)];
+        await choice.click();
+        if (stepTitle.includes('ผู้คุ้มกัน')) {
+          lastGuarded = (await choice.textContent()).split('ที่นั่ง')[0].trim();
+        }
+      }
       await page.click('.step-card button:has-text("บันทึก")');
     } else if (await page.locator('button:has-text("เริ่มช่วงอภิปราย")').count()) {
       await page.click('button:has-text("เริ่มช่วงอภิปราย")');
@@ -197,6 +226,10 @@ try {
   }
 
   ok((await page.locator('.tb-sub').textContent()).includes('จบเกม'), 'เกมเดินจนจบเองตามเงื่อนไขชนะ');
+  if (!checkedGuardHint) {
+    console.log('  (เกมนี้ผู้คุ้มกันไม่ได้เล่นถึงคืนที่สอง จึงไม่ได้ตรวจปุ่มที่ถูกปิด)');
+  }
+
   await page.click('.nb:has-text("สรุป")');
   await page.waitForSelector('.winner');
   const winner = (await page.locator('.winner .wt').textContent()).trim();
@@ -219,6 +252,13 @@ try {
   await admin.waitForSelector('text=แก้ค่าบทบาท');
   ok((await admin.locator('.card2').count()) > 40, 'หน้าแอดมินแสดงบทบาททั้ง 46 รายการ');
   if (SHOTS) await admin.screenshot({ path: SHOT_DIR + '/91-admin.png' });
+
+  await admin.click('a:has-text("ดูสถิติข้ามเกม")');
+  await admin.waitForURL('**/admin/stats');
+  await admin.waitForSelector('h6:has-text("ฝ่ายที่ชนะ")');
+  ok(await admin.locator('h6:has-text("ฝ่ายที่ชนะ")').isVisible(), 'หน้าสถิติสรุปฝ่ายที่ชนะได้');
+  ok((await admin.locator('.sumtable tbody tr').count()) > 0, 'หน้าสถิติมีตารางบทบาทและผู้เล่น');
+  if (SHOTS) await admin.screenshot({ path: SHOT_DIR + '/92-stats.png', fullPage: true });
 
   console.log('\nผ่านการตรวจ ' + checks + ' ข้อ' + (SHOTS ? ' (ภาพอยู่ที่ ' + SHOT_DIR + ')' : ''));
 } finally {

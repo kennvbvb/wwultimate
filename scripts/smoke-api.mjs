@@ -299,6 +299,12 @@ ok(del.status === 200, 'คืนค่าเริ่มต้นได้');
 const restored = await call('/api/bootstrap');
 ok(restored.body.catalog.roles.find((r) => r.roleId === 'villager').th === 'ชาวบ้าน',
    'ค่ากลับไปเป็นค่าเริ่มต้นจริง');
+/* ---- cross-game stats ---- */
+const stats = await call('/api/admin/stats');
+ok(stats.status === 200 && stats.body.games >= 1, 'หน้าสถิติเห็นเกมที่เล่นจบแล้ว ' + stats.body.games + ' เกม');
+ok(Array.isArray(stats.body.teamWins) && stats.body.players.length > 0, 'สถิติมีทั้งฝ่ายที่ชนะและรายผู้เล่น');
+ok(stats.body.recent.every((g) => g.winnersTh), 'ทุกเกมในรายการมีผลแพ้ชนะกำกับ');
+
 cookie = adminCookieBefore;
 
 console.log('\nผ่านการตรวจ ' + checks + ' ข้อ');

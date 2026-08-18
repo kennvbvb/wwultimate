@@ -135,7 +135,7 @@ export function addStatus(player: Record<string, unknown>, status: string): void
 export function removeStatus(player: Record<string, unknown>, status: string): void;
 export function detectedTeam(state: GameState, player: Record<string, unknown>): string;
 export function isThreatToSeer(state: GameState, player: Record<string, unknown>): boolean;
-export function isWolfTeam(team: string): boolean;
+export function isWolfTeam(player: Record<string, unknown>): boolean;
 export function isCultMember(player: Record<string, unknown>): boolean;
 
 /* ---- events / timeline ---- */

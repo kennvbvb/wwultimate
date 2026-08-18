@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { UiProvider, useUi } from '@/components/ui';
 
 interface AdminRole {
@@ -192,6 +193,8 @@ function AdminScreen() {
                  }} />
         </div>
         {dirty && <div className="hint mt-2">มีการแก้ไขที่ยังไม่ได้บันทึก</div>}
+        <Link className="btn-ghost w-100 mt-2" style={{ display: 'block', textAlign: 'center' }}
+              href="/admin/stats">📊 ดูสถิติข้ามเกม</Link>
       </div>
 
       {roles.map((r) => (

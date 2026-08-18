@@ -170,6 +170,8 @@ export interface ModeratorViewModel {
   timeline: TimelineEntry[];
   winners: Winners | null;
   flags: Record<string, unknown>;
+  /** playerId → why this target is off limits for the current step. */
+  targetHints?: Record<string, string>;
   /** Only present on the screen that creates a game — never persisted to a client. */
   moderatorPin?: string;
 }

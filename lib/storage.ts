@@ -3,6 +3,8 @@ import type { PoolClient } from 'pg';
 import * as E from './engine.generated.js';
 import { query, withTransaction } from './db.ts';
 import { ensureCatalogLoaded } from './catalog.ts';
+import { nightTargetHints } from './nightHints.ts';
+import { buildStats, type FinishedGameRow, type Stats } from './stats.ts';
 import type {
   Command, GameState, GameEvent, ModeratorViewModel, PublicViewModel, FinalSummary
 } from './types.ts';
@@ -37,6 +39,18 @@ function reviveState(raw: GameState): GameState {
 }
 
 function idemKey(gameId: string, key: string): string { return gameId + ':' + key; }
+
+/**
+ * The moderator view plus the per-target hints the night screen greys names out
+ * with. Built in one place so every path that returns a view — command, undo,
+ * reload, rematch — carries them; a screen that got the view from a command
+ * response would otherwise show live buttons the server is about to reject.
+ */
+function moderatorViewOf(state: GameState): ModeratorViewModel {
+  const view = E.moderatorViewModel(state);
+  view.targetHints = nightTargetHints(state, view.currentStep);
+  return view;
+}
 
 /** Turns any engine/db failure into the Thai message the UI shows verbatim. */
 export class GameError extends Error {}
@@ -122,7 +136,7 @@ export async function createGame(payload: {
     await writeEvents(client, state);
   });
 
-  const view = E.moderatorViewModel(state);
+  const view = moderatorViewOf(state);
   return { view, moderatorPin: pin };
 }
 
@@ -155,7 +169,7 @@ export async function loadState(gameId: string): Promise<GameState> {
 
 export async function moderatorView(gameId: string): Promise<ModeratorViewModel> {
   await ensureCatalogLoaded();
-  return E.moderatorViewModel(await loadState(gameId));
+  return moderatorViewOf(await loadState(gameId));
 }
 
 export async function publicView(gameId: string): Promise<PublicViewModel> {
@@ -246,7 +260,7 @@ export async function runCommand(
 
     await writeEvents(client, state);
 
-    const vm = E.moderatorViewModel(state);
+    const vm = moderatorViewOf(state);
     if (cmd.idempotencyKey) {
       await client.query(
         'INSERT INTO idempotency (key, game_id, result) VALUES ($1, $2, $3) ON CONFLICT (key) DO NOTHING',
@@ -285,7 +299,7 @@ export async function undoLastCommand(gameId: string): Promise<ModeratorViewMode
        state.status === 'FINISHED', gameId]);
     await client.query('DELETE FROM snapshots WHERE id = $1', [snap.rows[0].id]);
     await writeEvents(client, state);
-    return E.moderatorViewModel(state);
+    return moderatorViewOf(state);
   });
 
   return view;
@@ -310,7 +324,7 @@ export async function rematch(gameId: string): Promise<CreatedGame> {
   await query('UPDATE games SET state = $1, status = $2 WHERE game_id = $3',
     [JSON.stringify(stripForStorage(state)), state.status, state.gameId]);
 
-  return { view: E.moderatorViewModel(state), moderatorPin: created.moderatorPin };
+  return { view: moderatorViewOf(state), moderatorPin: created.moderatorPin };
 }
 
 /* ---------------- change detection (SSE) ---------------- */
@@ -324,6 +338,29 @@ export async function rematch(gameId: string): Promise<CreatedGame> {
 export async function readVersion(gameId: string): Promise<number | null> {
   const res = await query<{ version: number }>('SELECT version FROM games WHERE game_id = $1', [gameId]);
   return res.rowCount ? Number(res.rows[0].version) : null;
+}
+
+/* ---------------- cross-game statistics ---------------- */
+
+/**
+ * Finished games only. An unfinished game's state names the role of every
+ * living player, so it must never reach a summary screen.
+ */
+export async function finishedGames(limit = 500): Promise<FinishedGameRow[]> {
+  const res = await query<{ game_id: string; title: string; updated_at: Date; state: GameState }>(
+    'SELECT game_id, title, updated_at, state FROM games ' +
+    'WHERE finished = TRUE ORDER BY updated_at DESC LIMIT $1', [limit]);
+  return res.rows.map((r) => ({
+    gameId: r.game_id,
+    title: r.title,
+    finishedAt: r.updated_at.toISOString(),
+    state: r.state
+  }));
+}
+
+export async function gameStats(): Promise<Stats> {
+  await ensureCatalogLoaded();
+  return buildStats(await finishedGames());
 }
 
 /* ---------------- exports for the moderator ---------------- */

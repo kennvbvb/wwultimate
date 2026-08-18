@@ -29,7 +29,7 @@
 | หัวข้อ | สถานะ |
 |---|---|
 | เวอร์ชัน | 2.0.0 (ย้ายจาก Google Apps Script 1.0.0 มาแล้วครบทุกเฟส) |
-| ชุดทดสอบ | **ผ่าน 80 / ล้มเหลว 0** (`npm test`) |
+| ชุดทดสอบ | **ผ่าน 89 / ล้มเหลว 0** (`npm test`) |
 | บทบาท | ครบ 46 (Core 34 / Wolfpack 6 / Hunting Party 6) |
 | คำสั่งที่หน้าเว็บสั่งได้ | 22 ตัว ทุกตัวมีปุ่มเรียกจากหน้าจอและถูกยิงใน `npm run smoke` |
 | ตัวเลือกกติกา | 18 ตัว ทุกตัวมีโค้ดรองรับจริงและมีเทสต์คุม |
@@ -47,6 +47,7 @@ app/
   layout.tsx / globals.css          ธีมกลางคืน ฟอนต์ Sarabun+Prompt โฮสต์เอง
   public/[gameId]/page.tsx          จอสาธารณะ
   admin/page.tsx               271  หน้าแก้บทบาท 46 รายการ + CSV
+  admin/stats/page.tsx              สถิติข้ามเกม (เฉพาะเกมที่จบแล้ว)
   api/
     command/route.ts                POST ทุก mutation (ตารางคำสั่งอยู่ที่ lib/commands.ts)
     games/route.ts                  POST สร้างเกม
@@ -55,7 +56,7 @@ app/
     public/[gameId]/route.ts        GET view model สาธารณะ (ไม่ต้อง auth)
     stream/[gameId]/route.ts     78  SSE ส่งเฉพาะเลขเวอร์ชัน
     auth/{login,logout}/route.ts    ยืนยัน PIN → cookie
-    admin/{login,roles}/route.ts    หน้าแอดมิน
+    admin/{login,roles,stats}/route.ts  หน้าแอดมินและสถิติ
 components/
   ui.tsx                       174  Loading, PrivacyCover, Toast, Dialog, Modal
   PublicScreen.tsx              74
@@ -70,6 +71,8 @@ lib/
   catalog.ts                   132  override บทบาทจากตาราง role_overrides
   auth.ts                      113  PIN → bcrypt + JWT cookie, รหัสผ่านแอดมิน
   commands.ts                  138  ตารางคำสั่ง 20 ตัว + label + ธง snapshot
+  nightHints.ts                     บอกว่าปุ่มเป้าหมายใดกดไม่ได้และเพราะอะไร
+  stats.ts                          รวมสถิติข้ามเกมจากเกมที่จบแล้ว
   api.ts                        34  แปลง Error เป็น HTTP status
   client/{api,useGameStream,variants}.ts
 scripts/
@@ -78,7 +81,7 @@ scripts/
   smoke-api.mjs                304  เดินเกมจริงผ่าน HTTP ครบทุกคำสั่ง
   smoke-ui.mjs                 222  เดินเกม 8 คนบน Chromium ขนาดมือถือ
 migrations/001_init.sql
-tests/{engine,storage,publicview}.test.js + helpers.js
+tests/{engine,storage,publicview,nighthints,stats}.test.js + helpers.js
 ```
 
 ### ชั้นของสถาปัตยกรรม
@@ -252,7 +255,7 @@ snapshot (เฉพาะคำสั่งสำคัญ) → `UPDATE` → `IN
 ## 9. ชุดทดสอบ
 
 ```bash
-npm test              # ต้องได้ ผ่าน 80 / ล้มเหลว 0
+npm test              # ต้องได้ ผ่าน 89 / ล้มเหลว 0
 npm run test:engine   # เฉพาะตรรกะเกม ไม่ต้องมีฐานข้อมูล
 ```
 
@@ -261,6 +264,8 @@ npm run test:engine   # เฉพาะตรรกะเกม ไม่ต้�
 | `tests/engine.test.js` | 69 | ตรรกะเกมทั้งหมด ยกมาจากยุค Apps Script ไม่แก้แม้แต่ข้อเดียว |
 | `tests/storage.test.js` | 8 | idempotency, เวอร์ชันซ้อนทับ, snapshot/undo, trim 25, สองเกมไม่ปนกัน, **คำสั่งพร้อมกันต้องมีตัวหนึ่งแพ้** |
 | `tests/publicview.test.js` | 3 | จอสาธารณะห้ามรั่วบทบาทของคนเป็น ทุกช่วงของเกม |
+| `tests/nighthints.test.js` | 4 | ปุ่มที่หน้าจอปิดไว้ ต้องตรงกับที่ `validateTargets()` ปฏิเสธจริง ไม่ขาดไม่เกิน |
+| `tests/stats.test.js` | 5 | การรวมสถิติ และกฎที่ว่าสถิตินับเฉพาะเกมที่จบแล้ว |
 
 เทสต์ชั้นจัดเก็บข้อมูลรันบน **Postgres จริง** ไม่ใช่ของจำลอง เพราะของจำลองไม่รู้จัก
 `SELECT ... FOR UPDATE` ซึ่งเป็นสิ่งที่เทสต์กลุ่มนี้ตั้งใจพิสูจน์
@@ -270,8 +275,8 @@ npm run test:engine   # เฉพาะตรรกะเกม ไม่ต้�
 
 ```bash
 npm run build && npm start &
-npm run smoke      # ยิง API ครบทุกคำสั่ง 22 ตัว + SSE + หน้าแอดมิน (35 ข้อ)
-npm run smoke:ui   # Chromium 360px เดินเกม 8 คนจนประกาศผู้ชนะ (21 ข้อ)
+npm run smoke      # ยิง API ครบทุกคำสั่ง 22 ตัว + SSE + แอดมิน + สถิติ (38 ข้อ)
+npm run smoke:ui   # Chromium 360px เดินเกม 8 คนจนประกาศผู้ชนะ + แอดมิน + สถิติ (24 ข้อ)
 ```
 
 `smoke-ui` ต้องมี Chromium ถ้าเครื่องมี build ที่ไม่ตรงกับแพ็กเกจ ให้ชี้ด้วย
@@ -282,7 +287,7 @@ npm run smoke:ui   # Chromium 360px เดินเกม 8 คนจนปร�
 ```bash
 npm run build:engine     # การ์ดกัน Apps Script API + ตรวจรายชื่อ export
 npx tsc --noEmit         # type ทั้งโปรเจกต์
-npm test                 # 80/80
+npm test                 # 89/89
 ```
 
 ---
@@ -302,9 +307,8 @@ npm test                 # 80/80
 ### ไอเดียที่ยังไม่ทำ (ไม่เร่ง)
 
 - `LISTEN`/`NOTIFY` แทนการ poll เวอร์ชันในสตรีม — ตอนนี้ poll ทุก 1.2 วินาที
-  ซึ่งเบามากสำหรับผู้ใช้หลักสิบ และทนการที่ instance หายไปได้ดีกว่า
-- ปิดปุ่มเป้าหมายที่กติกาห้ามซ้ำสองคืนติด (ตอนนี้กดได้แล้วเซิร์ฟเวอร์ปฏิเสธพร้อมเหตุผล)
-- หน้าสรุปสถิติข้ามเกม
+  ซึ่งเบามากสำหรับผู้ใช้หลักสิบ และทนการที่ instance หายไปได้ดีกว่า **จงใจไม่ทำ**
+- ผูกผู้เล่นข้ามเกมด้วยรหัสนักเรียนแทนการจับคู่ตามชื่อในหน้าสถิติ
 
 ---
 
@@ -342,3 +346,6 @@ npm run smoke:ui       # เดินเกมบนเบราว์เซอ�
 7. แก้ลำดับการปลุกด้วยการ hard-code แทนการแก้ `wakePriority`
 8. แยก `runCommand()` ออกเป็นหลาย transaction → คำสั่งสองคำสั่งพร้อมกันเขียนทับกันได้
 9. พึ่งตัวแปรระดับโมดูลเป็นแหล่งความจริงบน Vercel → ค่าหายเมื่อ instance ถูกรีไซเคิล
+10. เพิ่มกฎใน `validateTargets()` แล้วลืมสะท้อนใน `lib/nightHints.ts` →
+    หน้าจอเปิดปุ่มที่เซิร์ฟเวอร์จะปฏิเสธ (มีเทสต์จับให้แล้วใน `tests/nighthints.test.js`)
+11. เอาเกมที่ยังเล่นค้างอยู่ไปคิดสถิติ → รั่วบทบาทของคนที่ยังมีชีวิตทันที

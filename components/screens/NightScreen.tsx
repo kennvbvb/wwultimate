@@ -146,17 +146,15 @@ function StepCard({ vm, onSubmitStep, onSkipStep, onResolveNight }: Props) {
 function TargetGrid({ vm, step, targets, onPick }: {
   vm: ModeratorViewModel; step: NightStep; targets: string[]; onPick: (id: string) => void;
 }) {
-  const wantDead = step.targetRule === 'DEAD_PLAYER';
+  /* The server says which names it would refuse and why, so the moderator finds
+   * out before tapping instead of after a rejected command. */
+  const hints = vm.targetHints || {};
   return (
     <>
       <div className="targets">
         {vm.players.map((p) => {
-          let disabled = wantDead ? p.alive : !p.alive;
-          let why = wantDead ? (p.alive ? 'ยังมีชีวิตอยู่' : '') : (!p.alive ? 'เสียชีวิตแล้ว' : '');
-          if (!wantDead && p.alive && step.actorIds.length === 1 &&
-              step.actorIds[0] === p.playerId && step.targetRule.indexOf('OTHER') >= 0) {
-            disabled = true; why = 'เลือกตัวเองไม่ได้';
-          }
+          const why = hints[p.playerId] || '';
+          const disabled = !!why;
           const selected = targets.indexOf(p.playerId) >= 0;
           return (
             <button key={p.playerId} disabled={disabled}
