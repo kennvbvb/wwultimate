@@ -1,5 +1,22 @@
 import type { Metadata, Viewport } from 'next';
+import { Prompt, Sarabun } from 'next/font/google';
 import './globals.css';
+
+/* Self-hosted at build time: a classroom wifi that cannot reach Google Fonts
+ * must not leave the moderator staring at fallback glyphs mid-game. */
+const sarabun = Sarabun({
+  subsets: ['thai', 'latin'],
+  weight: ['300', '400', '500', '600'],
+  variable: '--font-sarabun',
+  display: 'swap'
+});
+
+const prompt = Prompt({
+  subsets: ['thai', 'latin'],
+  weight: ['400', '600', '700'],
+  variable: '--font-prompt',
+  display: 'swap'
+});
 
 export const metadata: Metadata = {
   title: 'ผู้ดำเนินเกม Ultimate Werewolf',
@@ -7,7 +24,7 @@ export const metadata: Metadata = {
 };
 
 /* The moderator holds a phone in one hand and the deck in the other, so the
- * layout is designed for 360px first and never zooms on input focus. */
+ * layout is designed for 360px first and must not zoom when a field is focused. */
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
@@ -17,7 +34,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="th">
+    <html lang="th" className={sarabun.variable + ' ' + prompt.variable}>
       <body>{children}</body>
     </html>
   );

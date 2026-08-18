@@ -17,7 +17,8 @@
     "build": "next build",
     "start": "next start",
     "db:migrate": "node scripts/migrate.mjs",
-    "smoke": "node scripts/smoke-api.mjs"
+    "smoke": "node scripts/smoke-api.mjs",
+    "smoke:ui": "node scripts/smoke-ui.mjs"
   },
   "repository": {
     "type": "git",
@@ -40,6 +41,7 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "playwright": "^1.62.1",
     "typescript": "^5.9.3"
   },
   "private": true,

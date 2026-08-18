@@ -1,8 +1,401 @@
-export default function HomePage() {
+'use client';
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ModeratorViewModel, RuleVariants, SelectedRole } from '@/lib/types.ts';
+import * as api from '@/lib/client/api.ts';
+import { ApiError, type Bootstrap } from '@/lib/client/api.ts';
+import { useGameStream } from '@/lib/client/useGameStream.ts';
+import { Loading, Modal, PrivacyCover, UiProvider, useUi } from '@/components/ui';
+import HomeScreen from '@/components/screens/HomeScreen';
+import PlayersScreen from '@/components/screens/PlayersScreen';
+import RolesScreen from '@/components/screens/RolesScreen';
+import AssignScreen from '@/components/screens/AssignScreen';
+import NightScreen from '@/components/screens/NightScreen';
+import DayScreen from '@/components/screens/DayScreen';
+import EndScreen from '@/components/screens/EndScreen';
+
+const LAST_GAME_KEY = 'uw_last_game_v2';
+
+type Page = 'home' | 'players' | 'roles' | 'assign' | 'night' | 'day' | 'end';
+
+const NAV: { key: Page; label: string; icon: string }[] = [
+  { key: 'players', label: 'ผู้เล่น', icon: '👥' },
+  { key: 'roles', label: 'บทบาท', icon: '🃏' },
+  { key: 'assign', label: 'แจกการ์ด', icon: '🪪' },
+  { key: 'night', label: 'กลางคืน', icon: '🌙' },
+  { key: 'day', label: 'กลางวัน', icon: '☀️' },
+  { key: 'end', label: 'สรุป', icon: '🏆' }
+];
+
+export default function Page() {
   return (
-    <main className="uw-shell">
-      <h1>ผู้ดำเนินเกม Ultimate Werewolf</h1>
-      <p>กำลังย้ายระบบ…</p>
-    </main>
+    <UiProvider>
+      <ModeratorConsole />
+    </UiProvider>
   );
+}
+
+function ModeratorConsole() {
+  const ui = useUi();
+  const [boot, setBoot] = useState<Bootstrap | null>(null);
+  const [vm, setVm] = useState<ModeratorViewModel | null>(null);
+  const [page, setPage] = useState<Page>('home');
+  const [busy, setBusy] = useState(false);
+  const [covered, setCovered] = useState(false);
+  const [tools, setTools] = useState(false);
+  const [log, setLog] = useState<{ type: string; at: string }[] | null>(null);
+  const [pinOnce, setPinOnce] = useState('');
+
+  /* ---------------- boot ---------------- */
+
+  useEffect(() => {
+    api.getBootstrap().then(setBoot).catch((e) => ui.toast(e.message, 'bad'));
+    let last = '';
+    try { last = localStorage.getItem(LAST_GAME_KEY) || ''; } catch { /* private mode */ }
+    if (last) {
+      /* The cookie may still be valid from an earlier session — try silently. */
+      api.getGame(last).then(applyVm).catch(() => { /* fall through to the home screen */ });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const applyVm = useCallback((next: ModeratorViewModel) => {
+    setVm(next);
+    try { localStorage.setItem(LAST_GAME_KEY, next.gameId); } catch { /* private mode */ }
+    setPage(routeByStatus(next));
+  }, []);
+
+  const reload = useCallback(() => {
+    if (!vm) return;
+    api.getGame(vm.gameId).then(setVm).catch((e) => ui.toast(e.message, 'bad'));
+  }, [vm, ui]);
+
+  /* Another device (or the public screen) changed the game — pick it up. */
+  useGameStream(vm ? vm.gameId : null, vm?.version || 0, () => {
+    if (!vm) return;
+    api.getGame(vm.gameId).then(setVm).catch(() => { /* transient */ });
+  });
+
+  /* ---------------- command plumbing ---------------- */
+
+  const run = useCallback(async (action: string, extra: Record<string, unknown> = {}) => {
+    if (!vm) return;
+    setBusy(true);
+    try {
+      const next = await api.sendCommand({
+        action, gameId: vm.gameId, expectedVersion: vm.version, ...extra
+      });
+      applyVm(next);
+      return next;
+    } catch (e) {
+      const err = e as ApiError;
+      if (err.isConflict) {
+        ui.toast('มีการเปลี่ยนแปลงจากหน้าจออื่น กำลังโหลดสถานะล่าสุด');
+        reload();
+      } else if (err.isAuth) {
+        ui.toast('หมดเวลาเข้าสู่ระบบ กรุณากรอก PIN อีกครั้ง', 'bad');
+        setVm(null);
+        setPage('home');
+      } else {
+        ui.toast(err.message, 'bad');
+      }
+      return undefined;
+    } finally {
+      setBusy(false);
+    }
+  }, [vm, applyVm, reload, ui]);
+
+  /**
+   * ruleVariants.randomDelayMs: pause a random moment before a "nothing
+   * happened" step so the table cannot tell real actions from skipped ones by
+   * how long the moderator stays quiet.
+   */
+  const maskedDelay = useCallback(async () => {
+    const max = vm?.ruleVariants.randomDelayMs || 0;
+    if (!max) return;
+    const wait = Math.floor(Math.random() * max) + Math.floor(max / 3);
+    setBusy(true);
+    await new Promise((r) => setTimeout(r, wait));
+  }, [vm]);
+
+  /* ---------------- entry points ---------------- */
+
+  const createGame = async (names: string[], title: string) => {
+    setBusy(true);
+    try {
+      const next = await api.createGame(names, title);
+      setPinOnce(next.moderatorPin || '');
+      applyVm(next);
+    } catch (e) {
+      ui.toast((e as Error).message, 'bad');
+    } finally { setBusy(false); }
+  };
+
+  const openGame = async (gameId: string, pin: string) => {
+    setBusy(true);
+    try {
+      applyVm(await api.login(gameId, pin));
+    } catch (e) {
+      ui.toast((e as Error).message, 'bad');
+    } finally { setBusy(false); }
+  };
+
+  /* ---------------- top bar actions ---------------- */
+
+  const undo = async () => {
+    const res = await ui.confirm({
+      title: 'ย้อนคำสั่งล่าสุด', icon: '↩️',
+      text: 'ระบบจะย้อนกลับไปยังสถานะก่อนคำสั่งสำคัญล่าสุด (เก็บไว้ 25 ขั้น)',
+      confirmText: 'ย้อนกลับ'
+    });
+    if (!res.confirmed) return;
+    if (await run('undo')) ui.toast('ย้อนคำสั่งแล้ว', 'good');
+  };
+
+  const openLog = async () => {
+    if (!vm) return;
+    try {
+      const rows = await api.getEvents(vm.gameId, 120);
+      setLog(rows.map((r) => ({ type: r.type, at: r.at })));
+    } catch (e) { ui.toast((e as Error).message, 'bad'); }
+  };
+
+  /* ---------------- tools ---------------- */
+
+  const toolSwap = async () => {
+    if (!vm) return;
+    setTools(false);
+    const options = vm.players.map((p) => ({
+      value: p.playerId, label: p.seat + '. ' + p.name + (p.alive ? '' : ' (เสียชีวิต)')
+    }));
+    const res = await ui.confirm({
+      title: 'สลับบทบาทระหว่างผู้เล่นสองคน', icon: '🔄',
+      select: [{ label: 'คนที่หนึ่ง', options }, { label: 'คนที่สอง', options, initial: options[1]?.value }],
+      confirmText: 'สลับ'
+    });
+    if (!res.confirmed) return;
+    const [a, b] = res.choices || [];
+    if (!a || !b || a === b) { ui.toast('ต้องเลือกคนละคน', 'bad'); return; }
+    if (await run('swapRoles', { playerA: a, playerB: b })) ui.toast('สลับบทบาทแล้ว', 'good');
+  };
+
+  const toolReopen = async () => {
+    setTools(false);
+    const res = await ui.confirm({
+      title: 'กลับไปแก้การแจกบทบาท', icon: '🔓', danger: true,
+      text: 'เหตุการณ์ทั้งหมดในเกมนี้จะถูกล้าง และเริ่มนับคืนใหม่',
+      input: { label: 'เหตุผล (ไม่บังคับ)' }
+    });
+    if (!res.confirmed) return;
+    if (await run('reopenRoleAssignment', { reason: res.value || 'ผู้ดำเนินเกมสั่งแก้ไข' })) {
+      ui.toast('กลับสู่หน้าแจกบทบาทแล้ว', 'good');
+    }
+  };
+
+  const toolKill = async () => {
+    if (!vm) return;
+    setTools(false);
+    const options = vm.players.filter((p) => p.alive)
+      .map((p) => ({ value: p.playerId, label: p.seat + '. ' + p.name }));
+    if (!options.length) { ui.toast('ไม่มีผู้เล่นที่ยังมีชีวิต', 'bad'); return; }
+    const res = await ui.confirm({
+      title: 'สั่งให้ผู้เล่นเสียชีวิต', icon: '☠️', danger: true,
+      select: [{ label: 'ผู้เล่น', options }],
+      input: { label: 'เหตุผล', placeholder: 'เช่น ออกจากเกมกลางคัน' }
+    });
+    if (!res.confirmed || !res.choices?.[0]) return;
+    await run('moderatorKill', { playerId: res.choices[0], reason: res.value || 'ผู้ดำเนินเกมตัดสิน' });
+  };
+
+  const toolEnd = async () => {
+    setTools(false);
+    const res = await ui.confirm({
+      title: 'จบเกมทันที', icon: '🏁', danger: true,
+      text: 'ปิดเกมโดยไม่รอเงื่อนไขชนะ แล้วไปหน้าสรุปผล',
+      input: { label: 'เหตุผล (ไม่บังคับ)' }
+    });
+    if (!res.confirmed) return;
+    await run('endGame', { reason: res.value || 'ผู้ดำเนินเกมสั่งจบเกม' });
+  };
+
+  const rematch = async () => {
+    const next = await run('rematch');
+    if (next) {
+      setPinOnce(next.moderatorPin || '');
+      ui.toast('สร้างเกมใหม่ด้วยที่นั่งเดิมแล้ว', 'good');
+    }
+  };
+
+  /* ---------------- render ---------------- */
+
+  const catalog = boot?.catalog.roles || [];
+  const impactVerified = boot?.catalog.impactVerified ?? false;
+
+  const body = useMemo(() => {
+    if (!vm || page === 'home') {
+      return <HomeScreen boot={boot} onCreate={createGame} onOpen={openGame} />;
+    }
+    switch (page) {
+      case 'players':
+        return <PlayersScreen vm={vm} onSave={(names) => run('setPlayers', { playerNames: names })
+          .then((next) => { if (next) setPage('roles'); })} />;
+      case 'roles':
+        return <RolesScreen vm={vm} catalog={catalog} impactVerified={impactVerified}
+          onSave={(selectedRoles: SelectedRole[], ruleVariants: RuleVariants, title: string) =>
+            run('configureGame', { selectedRoles, ruleVariants, title })
+              .then((next) => { if (next) setPage('assign'); })} />;
+      case 'assign':
+        return <AssignScreen vm={vm} catalog={catalog}
+          onSaveAssignments={async (assignments, silent) => {
+            const next = await run('assignRoles', { assignments });
+            if (next && !silent) ui.toast('บันทึกการแจกการ์ดแล้ว', 'good');
+          }}
+          onStartGame={() => run('startGame')} />;
+      case 'night':
+        return <NightScreen vm={vm}
+          onSubmitStep={(stepId, targetIds, meta) => { run('submitRoleAction', { stepId, targetIds, meta }); }}
+          onSkipStep={async (stepId) => { await maskedDelay(); run('skipStep', { stepId }); }}
+          onResolveNight={() => run('resolveNight')}
+          onResolvePrompt={(promptId, targetId) => run('resolvePrompt', { promptId, targetId })} />;
+      case 'day':
+        return <DayScreen vm={vm}
+          onStartDiscussion={() => run('startDiscussion')}
+          onOpenNomination={() => run('openNomination')}
+          onCloseNomination={(nomineeIds) => run('startNomination', { nomineeIds })}
+          onSubmitVotes={(votes) => run('submitVote', { votes }).then((n) => { if (n) ui.toast('บันทึกคะแนนแล้ว', 'good'); })}
+          onResolveVote={(choice) => run('resolveVote', { moderatorChoice: choice || null })}
+          onForceEndDay={() => run('forceEndDay')}
+          onModeratorKill={(playerId, reason) => run('moderatorKill', { playerId, reason })}
+          onResolvePrompt={(promptId, targetId) => run('resolvePrompt', { promptId, targetId })} />;
+      case 'end':
+        return <EndScreen gameId={vm.gameId} version={vm.version} onRematch={rematch} />;
+      default:
+        return null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vm, page, boot, catalog, impactVerified]);
+
+  const phase = [
+    vm?.nightNumber ? 'คืนที่ ' + vm.nightNumber : '',
+    vm?.dayNumber ? 'วันที่ ' + vm.dayNumber : ''
+  ].filter(Boolean).join(' • ');
+
+  return (
+    <>
+      <Loading show={busy} />
+      <PrivacyCover show={covered} onHide={() => setCovered(false)} />
+
+      <header id="topbar">
+        <div className="tb-left">
+          <span className="tb-title">{vm?.title || 'Ultimate Werewolf'}</span>
+          <span className="tb-sub">{vm ? vm.gameId + ' • ' + vm.statusTh : 'ผู้ช่วยผู้ดำเนินเกม'}</span>
+        </div>
+        <div className="tb-right">
+          <button className="ic" title="ซ่อนจอ" onClick={() => setCovered(true)}>👁️</button>
+          {vm && (
+            <>
+              <button className={'ic' + (vm.status === 'PAUSED' ? ' on' : '')} title="หยุดพัก"
+                      onClick={() => run(vm.status === 'PAUSED' ? 'resumeGame' : 'pauseGame')}>⏸</button>
+              <button className="ic" title="ย้อนคำสั่ง" onClick={undo}>↩️</button>
+              <button className="ic" title="บันทึกเหตุการณ์" onClick={openLog}>📋</button>
+              <button className="ic" title="เครื่องมือผู้ดำเนินเกม" onClick={() => setTools(true)}>🔧</button>
+            </>
+          )}
+        </div>
+      </header>
+
+      {vm && (
+        <div id="statusbar" className="show">
+          <span>{vm.statusTh}{phase ? ' — ' + phase : ''}</span>
+          <span>มีชีวิต <b>{vm.aliveCount}</b> / {vm.totalCount}</span>
+        </div>
+      )}
+
+      <main id="main">
+        {pinOnce && vm && (
+          <div className="card2">
+            <h5>🔐 PIN ผู้ดำเนินเกม</h5>
+            <p className="hint">จดไว้ให้ดี ระบบจะไม่แสดงอีก ใช้คู่กับรหัสเกม {vm.gameId} เมื่อเปิดจากเครื่องอื่น</p>
+            <div className="pin-box">{pinOnce}</div>
+            <div className="hint mt-2">
+              จอสาธารณะ: <code>/public/{vm.gameId}</code> — เปิดได้โดยไม่ต้องใช้ PIN
+            </div>
+            <button className="btn-ghost w-100 mt-2" onClick={() => setPinOnce('')}>จดแล้ว ปิดข้อความนี้</button>
+          </div>
+        )}
+        {body}
+      </main>
+
+      {vm && (
+        <nav id="bottomNav" className="show">
+          {NAV.map((n) => (
+            <button key={n.key} className={'nb' + (page === n.key ? ' active' : '')}
+                    onClick={() => setPage(n.key)}>
+              <span>{n.icon}</span>{n.label}
+            </button>
+          ))}
+        </nav>
+      )}
+
+      {tools && vm && (
+        <Modal title="เครื่องมือผู้ดำเนินเกม" onClose={() => setTools(false)}>
+          <div className="toollist">
+            <button className="toolbtn" onClick={toolSwap}>
+              <span>🔄</span><span><b>สลับบทบาทระหว่างผู้เล่นสองคน</b>
+                <small>ใช้เมื่อบันทึกการ์ดสลับคนกัน</small></span>
+            </button>
+            <button className="toolbtn" onClick={toolReopen}>
+              <span>🔓</span><span><b>กลับไปแก้การแจกบทบาท</b>
+                <small>ล้างเหตุการณ์ในเกมทั้งหมด ใช้เมื่อแจกผิดตั้งแต่ต้น</small></span>
+            </button>
+            <button className="toolbtn" onClick={toolKill}>
+              <span>☠️</span><span><b>สั่งให้ผู้เล่นเสียชีวิต</b>
+                <small>ใช้เมื่อมีเหตุนอกกติกา เช่น ผู้เล่นออกกลางคัน</small></span>
+            </button>
+            <a className="toolbtn" href={'/api/game/' + encodeURIComponent(vm.gameId) + '/players.csv'}>
+              <span>📄</span><span><b>ส่งออกตารางผู้เล่น (CSV)</b>
+                <small>เปิดใน Google Sheets หรือ Excel ได้ทันที</small></span>
+            </a>
+            <button className="toolbtn" onClick={toolEnd}>
+              <span>🏁</span><span><b>จบเกมทันที</b>
+                <small>ปิดเกมโดยไม่รอเงื่อนไขชนะ</small></span>
+            </button>
+          </div>
+          <div className="hint mt-2">
+            สถานะปัจจุบัน: {vm.statusTh} • ทุกคำสั่งสำคัญย้อนกลับได้ด้วยปุ่ม ↩️
+          </div>
+        </Modal>
+      )}
+
+      {log && (
+        <Modal title="บันทึกเหตุการณ์" onClose={() => setLog(null)}>
+          <div className="reslist" style={{ maxHeight: '60vh', overflow: 'auto' }}>
+            {!log.length && <div>ยังไม่มีเหตุการณ์</div>}
+            {log.map((r, i) => (
+              <div key={i}><b>{r.type}</b> <span className="hint">{r.at}</span></div>
+            ))}
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+/** Same routing table the Apps Script client used. */
+function routeByStatus(vm: ModeratorViewModel): Page {
+  switch (vm.status) {
+    case 'SETUP': return vm.players.length ? 'roles' : 'players';
+    case 'ROLE_ASSIGNMENT': return 'assign';
+    case 'FIRST_NIGHT':
+    case 'NIGHT':
+    case 'RESOLVE_NIGHT': return 'night';
+    case 'DEATH_TRIGGER': return vm.nightNumber && !vm.dayNumber ? 'night' : 'day';
+    case 'DAWN':
+    case 'DISCUSSION':
+    case 'NOMINATION':
+    case 'VOTING':
+    case 'RESOLVE_DAY': return 'day';
+    case 'FINISHED': return 'end';
+    default: return 'day';
+  }
 }
