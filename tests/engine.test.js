@@ -1,11 +1,10 @@
 /**
- * run.js — full automated test suite (spec 15.1 unit tests + 15.2 scenarios).
- * Usage: node tests/run.js
+ * engine.test.js — spec 15.1 unit tests + 15.2 scenarios.
+ * Pure rule-engine tests: no database, no network, nothing mocked.
  */
-const H = require('./harness');
-const { suite, test, assert, eq, throws, newGame, pid, player, hasStep, act,
-        finishRemainingSteps, resolveNightAndDawn } = H;
-const E = H.loadEngine();
+import { suite, test, assert, eq, throws, newGame, pid, player, hasStep, act,
+         finishRemainingSteps, resolveNightAndDawn } from './helpers.js';
+import * as E from '../lib/engine.generated.js';
 
 /* Helper: run a full day with no lynch and go to the next night. */
 function nextNight(st) { E.forceEndDay(st); }
@@ -848,121 +847,3 @@ test('openNomination เรียกผิดช่วงต้องถูก�
   const st = newGame(E, ['werewolf', 'villager', 'villager', 'villager', 'villager']);
   throws(() => E.openNomination(st), 'กลางคืนยังเปิดการเสนอชื่อไม่ได้');
 });
-
-/* ================================================================
- * ชั้นจัดเก็บข้อมูล + ประสิทธิภาพ (ระยะที่ 1)
- * ใช้ Google Sheets จำลองที่นับจำนวนครั้งที่ถูกเรียกจริง
- * ================================================================ */
-suite('ชั้นจัดเก็บข้อมูลและประสิทธิภาพ');
-
-function freshStore() {
-  const F = H.loadFull();
-  F.setupSpreadsheet();
-  F.syncRoleCatalogToSheet(true);
-  return F;
-}
-function newStoredGame(F, n) {
-  const names = [];
-  for (let i = 1; i <= (n || 12); i++) names.push('ผู้เล่น' + i);
-  const vm0 = F.apiCreateGame({ playerNames: names });
-  return { gameId: vm0.gameId, pin: vm0.moderatorPin, version: vm0.version, names: names };
-}
-function zero(c) { Object.keys(c).forEach(k => (c[k] = 0)); }
-
-test('บันทึกแล้วอ่านกลับได้ครบถ้วน', () => {
-  const F = freshStore();
-  const g = newStoredGame(F, 8);
-  const vm = F.apiLoadGame(g.gameId, g.pin);
-  eq(vm.gameId, g.gameId, 'อ่านเกมเดิมกลับมาได้');
-  eq(vm.players.length, 8, 'จำนวนผู้เล่นครบ');
-  throws(() => F.apiLoadGame(g.gameId, '0000'), 'PIN ผิดต้องเข้าไม่ได้');
-});
-
-test('คำสั่งธรรมดาไม่ลบแถวทีละแถวอีกแล้ว', () => {
-  const F = freshStore();
-  const g = newStoredGame(F, 12);
-  const c = F.__env.counts;
-  F.resetStorageHandles_();
-  zero(c);
-  F.apiSetPlayers({ gameId: g.gameId, moderatorPin: g.pin,
-                    expectedVersion: g.version, playerNames: g.names });
-  eq(c.deleteRow, 0, 'ห้ามมี deleteRow แม้แต่ครั้งเดียว (เดิม 12 ครั้ง)');
-  eq(c.openById, 1, 'เปิดสเปรดชีตครั้งเดียวต่อการรัน (เดิม 3 ครั้ง)');
-  assert(c.getValues <= 2, 'สแกนคอลัมน์ไม่เกินหนึ่งครั้ง แต่ได้ ' + c.getValues);
-});
-
-test('จอสาธารณะ poll ไม่อ่านชีตบทบาทซ้ำ', () => {
-  const F = freshStore();
-  const g = newStoredGame(F, 6);
-  F.apiPublicView(g.gameId);          /* ครั้งแรกเติมแคช */
-  const c = F.__env.counts;
-  F.resetStorageHandles_();
-  zero(c);
-  F.apiPublicView(g.gameId);
-  eq(c.openById, 1, 'เปิดสเปรดชีตครั้งเดียว (เดิม 2 ครั้ง)');
-  assert(c.getValues <= 1, 'ไม่อ่านชีต RoleCatalog ซ้ำ แต่ได้ getValues ' + c.getValues);
-});
-
-test('จำเลขแถวผิดแล้วต้องหาใหม่ได้เอง ไม่เขียนทับเกมอื่น', () => {
-  const F = freshStore();
-  const a = newStoredGame(F, 5);
-  const b = newStoredGame(F, 5);
-  /* จงใจทำให้แคชเลขแถวผิด */
-  F.__env.cacheStore['ROW:' + a.gameId] = '99';
-  F.resetStorageHandles_();
-  const vmA = F.apiLoadGame(a.gameId, a.pin);
-  eq(vmA.gameId, a.gameId, 'ยังอ่านเกม A ถูกตัวแม้แคชเลขแถวผิด');
-  const vmB = F.apiLoadGame(b.gameId, b.pin);
-  eq(vmB.gameId, b.gameId, 'เกม B ไม่ถูกกระทบ');
-});
-
-test('ตาราง Players อัปเดตเมื่อสั่งส่งออกและเมื่อจบเกม', () => {
-  const F = freshStore();
-  const g = newStoredGame(F, 5);
-  const sheet = F.__env.sheets['Players'];
-  eq(sheet._rows.length, 1, 'ระหว่างเล่นยังไม่เขียนตาราง Players');
-
-  F.apiExportPlayerTable({ gameId: g.gameId, moderatorPin: g.pin });
-  eq(sheet._rows.length, 6, 'สั่งส่งออกแล้วได้ 5 แถว + หัวตาราง');
-
-  /* ส่งออกซ้ำต้องไม่ทำให้แถวซ้ำซ้อน */
-  F.apiExportPlayerTable({ gameId: g.gameId, moderatorPin: g.pin });
-  eq(sheet._rows.length, 6, 'ส่งออกซ้ำแล้วแถวต้องไม่งอก');
-  eq(F.__env.counts.deleteRow, 0, 'ลบด้วย deleteRows ครั้งเดียว ไม่ใช่ทีละแถว');
-});
-
-test('ส่งออกตาราง Players ของสองเกมพร้อมกันไม่ปนกัน', () => {
-  const F = freshStore();
-  const a = newStoredGame(F, 4);
-  const b = newStoredGame(F, 6);
-  F.apiExportPlayerTable({ gameId: a.gameId, moderatorPin: a.pin });
-  F.apiExportPlayerTable({ gameId: b.gameId, moderatorPin: b.pin });
-  F.apiExportPlayerTable({ gameId: a.gameId, moderatorPin: a.pin });
-
-  const rows = F.__env.sheets['Players']._rows.slice(1);
-  eq(rows.length, 10, 'รวมสองเกมต้องได้ 10 แถวพอดี');
-  eq(rows.filter(r => r[0] === a.gameId).length, 4, 'เกม A เหลือ 4 แถว');
-  eq(rows.filter(r => r[0] === b.gameId).length, 6, 'เกม B เหลือ 6 แถว');
-});
-
-test('ตรวจเวอร์ชันซ้อนทับยังทำงาน กันคำสั่งค้างจากจอเก่า', () => {
-  const F = freshStore();
-  const g = newStoredGame(F, 5);
-  F.apiSetPlayers({ gameId: g.gameId, moderatorPin: g.pin,
-                    expectedVersion: g.version, playerNames: g.names });
-  throws(() => F.apiSetPlayers({ gameId: g.gameId, moderatorPin: g.pin,
-                                 expectedVersion: g.version, playerNames: g.names }),
-         'ส่งเวอร์ชันเก่าซ้ำต้องถูกปฏิเสธ');
-});
-
-test('idempotencyKey เดิมต้องไม่ทำงานซ้ำสองรอบ', () => {
-  const F = freshStore();
-  const g = newStoredGame(F, 5);
-  const c1 = { gameId: g.gameId, moderatorPin: g.pin, expectedVersion: g.version,
-               idempotencyKey: 'KEY-1', playerNames: g.names };
-  const r1 = F.apiSetPlayers(c1);
-  const r2 = F.apiSetPlayers(c1);
-  eq(r2.version, r1.version, 'ส่งซ้ำด้วยคีย์เดิมต้องได้ผลเดิม ไม่เพิ่มเวอร์ชัน');
-});
-
-process.exit(H.report() ? 0 : 1);

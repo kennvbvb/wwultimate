@@ -1,0 +1,8 @@
+:root {
+  --bg: #0b1020;
+  --fg: #e8eaf6;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+body { font-family: 'Sarabun', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+.uw-shell { max-width: 720px; margin: 0 auto; padding: 16px; }
