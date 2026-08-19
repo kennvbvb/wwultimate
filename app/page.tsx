@@ -5,6 +5,9 @@ import type { ModeratorViewModel, RuleVariants, SelectedRole } from '@/lib/types
 import * as api from '@/lib/client/api.ts';
 import { ApiError, type Bootstrap, type RecentGame } from '@/lib/client/api.ts';
 import { useGameStream } from '@/lib/client/useGameStream.ts';
+import {
+  lynchAnnouncement, nightDeathAnnouncement, stepResultAnnouncement
+} from '@/lib/client/announce.ts';
 import { Loading, Modal, PrivacyCover, UiProvider, useUi } from '@/components/ui';
 import HomeScreen from '@/components/screens/HomeScreen';
 import PlayersScreen from '@/components/screens/PlayersScreen';
@@ -293,9 +296,21 @@ function ModeratorConsole() {
           onStartGame={() => run('startGame')} />;
       case 'night':
         return <NightScreen vm={vm}
-          onSubmitStep={(stepId, targetIds, meta) => { run('submitRoleAction', { stepId, targetIds, meta }); }}
+          onSubmitStep={async (stepId, targetIds, meta) => {
+            const before = vm;
+            const next = await run('submitRoleAction', { stepId, targetIds, meta });
+            /* The seer's nod, the P.I.'s reading, the masons' names — the answer
+             * has to reach the moderator before they look away from the phone. */
+            if (next) {
+              const said = stepResultAnnouncement(before, next);
+              if (said) await ui.announce(said);
+            }
+          }}
           onSkipStep={async (stepId) => { await maskedDelay(); run('skipStep', { stepId }); }}
-          onResolveNight={() => run('resolveNight')}
+          onResolveNight={async () => {
+            const next = await run('resolveNight');
+            if (next) await ui.announce(nightDeathAnnouncement(next));
+          }}
           onResolvePrompt={(promptId, targetId) => run('resolvePrompt', { promptId, targetId })} />;
       case 'day':
         return <DayScreen vm={vm}
@@ -307,7 +322,11 @@ function ModeratorConsole() {
             if (next) ui.toast('บันทึกคะแนนแล้ว', 'good');
             return !!next;
           }}
-          onResolveVote={(choice) => run('resolveVote', { moderatorChoice: choice || null })}
+          onResolveVote={async (choice) => {
+            const before = vm;
+            const next = await run('resolveVote', { moderatorChoice: choice || null });
+            if (next) await ui.announce(lynchAnnouncement(before, next));
+          }}
           onForceEndDay={() => run('forceEndDay')}
           onModeratorKill={(playerId, reason) => run('moderatorKill', { playerId, reason })}
           onResolvePrompt={(promptId, targetId) => run('resolvePrompt', { promptId, targetId })} />;

@@ -6,9 +6,9 @@ import { useUi } from '@/components/ui';
 
 interface Props {
   vm: ModeratorViewModel;
-  onSubmitStep: (stepId: string, targetIds: string[], meta: Record<string, unknown>) => void;
+  onSubmitStep: (stepId: string, targetIds: string[], meta: Record<string, unknown>) => void | Promise<void>;
   onSkipStep: (stepId: string) => void;
-  onResolveNight: () => void;
+  onResolveNight: () => void | Promise<void>;
   onResolvePrompt: (promptId: string, targetId: string | null) => void;
 }
 

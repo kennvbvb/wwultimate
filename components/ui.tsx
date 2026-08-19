@@ -34,6 +34,15 @@ interface ToastItem { id: number; text: string; kind: ToastKind }
 interface UiApi {
   toast: (text: string, kind?: ToastKind) => void;
   confirm: (opts: ConfirmOptions) => Promise<ConfirmResult>;
+  /** A dialog with one button — for things the moderator must read, not decide. */
+  announce: (opts: AnnounceOptions) => Promise<void>;
+}
+
+export interface AnnounceOptions {
+  title: string;
+  icon?: string;
+  lines: string[];
+  confirmText?: string;
 }
 
 const UiContext = createContext<UiApi | null>(null);
@@ -57,6 +66,9 @@ export interface ConfirmOptions {
   /** Adds a dropdown; its value comes back in `choice`. */
   select?: { label: string; options: { value: string; label: string }[]; initial?: string }[];
   danger?: boolean;
+  /** Announcements have nothing to cancel. */
+  hideCancel?: boolean;
+  lines?: string[];
 }
 
 export interface ConfirmResult {
@@ -82,7 +94,17 @@ export function UiProvider({ children }: { children: React.ReactNode }) {
     return new Promise<ConfirmResult>((resolve) => { resolver.current = resolve; });
   }, []);
 
-  const api = useMemo(() => ({ toast, confirm }), [toast, confirm]);
+  const announce = useCallback(async (opts: AnnounceOptions) => {
+    await confirm({
+      title: opts.title,
+      icon: opts.icon,
+      lines: opts.lines,
+      confirmText: opts.confirmText || 'รับทราบ',
+      hideCancel: true
+    });
+  }, [confirm]);
+
+  const api = useMemo(() => ({ toast, confirm, announce }), [toast, confirm, announce]);
 
   const finish = (result: ConfirmResult) => {
     setDialog(null);
@@ -107,11 +129,17 @@ function DialogBox({ options, onDone }: { options: ConfirmOptions; onDone: (r: C
     (options.select || []).map((s) => s.initial || s.options[0]?.value || ''));
 
   return (
-    <div className="dlg-back" onClick={() => onDone({ confirmed: false })}>
+    <div className="dlg-back" onClick={() => { if (!options.hideCancel) onDone({ confirmed: false }); }}>
       <div className="dlg" onClick={(e) => e.stopPropagation()}>
         {options.icon && <span className="dlg-icon">{options.icon}</span>}
         <h4>{options.title}</h4>
         {options.text && <p className="hint">{options.text}</p>}
+
+        {options.lines && options.lines.length > 0 && (
+          <div className="dlg-lines">
+            {options.lines.map((line, i) => <div key={i}>{line}</div>)}
+          </div>
+        )}
 
         {(options.select || []).map((sel, i) => (
           <div key={sel.label} className="mt-2">
@@ -140,9 +168,11 @@ function DialogBox({ options, onDone }: { options: ConfirmOptions; onDone: (r: C
         )}
 
         <div className="dlg-actions">
-          <button className="btn-ghost" onClick={() => onDone({ confirmed: false })}>
-            {options.cancelText || 'ยกเลิก'}
-          </button>
+          {!options.hideCancel && (
+            <button className="btn-ghost" onClick={() => onDone({ confirmed: false })}>
+              {options.cancelText || 'ยกเลิก'}
+            </button>
+          )}
           <button
             className={options.danger ? 'btn-r' : 'btn-p'}
             onClick={() => onDone({ confirmed: true, value, choices })}

@@ -104,6 +104,9 @@ button:disabled{opacity:.45}
 .mini{background:var(--card2);border:1px solid var(--bdr);color:var(--mut);border-radius:9px;
   width:34px;height:34px;font-size:.9rem}
 
+.prow.dealt{opacity:.5}
+.prow.dealt .badge2{background:#0f2b1c;color:#86efac;border-color:#1f7a4d}
+
 .seat-circle{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
 .seat-chip{background:var(--card2);border:1px solid var(--bdr);border-radius:999px;
   padding:6px 12px;font-size:.82rem}
@@ -288,6 +291,12 @@ button:disabled{opacity:.45}
 }
 .dlg h4{font-family:var(--font-prompt),'Prompt',sans-serif;margin:0 0 8px;font-size:1.15rem}
 .dlg .dlg-icon{font-size:1.8rem;display:block;margin-bottom:6px}
+.dlg-lines{
+  background:#0d1430;border:1px solid var(--bdr);border-radius:12px;padding:10px 12px;margin-top:10px;
+  font-size:1.02rem;line-height:1.6;
+}
+.dlg-lines div{padding:4px 0;border-bottom:1px dashed var(--bdr)}
+.dlg-lines div:last-child{border:none}
 .dlg-actions{display:flex;gap:8px;margin-top:16px}
 .dlg-actions button{flex:1}
 

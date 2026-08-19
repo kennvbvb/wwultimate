@@ -29,7 +29,7 @@
 | หัวข้อ | สถานะ |
 |---|---|
 | เวอร์ชัน | 2.0.0 (ย้ายจาก Google Apps Script 1.0.0 มาแล้วครบทุกเฟส) |
-| ชุดทดสอบ | **ผ่าน 109 / ล้มเหลว 0** (`npm test`) |
+| ชุดทดสอบ | **ผ่าน 118 / ล้มเหลว 0** (`npm test`) |
 | บทบาท | ครบ 46 (Core 34 / Wolfpack 6 / Hunting Party 6) |
 | คำสั่งที่หน้าเว็บสั่งได้ | 22 ตัว ทุกตัวมีปุ่มเรียกจากหน้าจอและถูกยิงใน `npm run smoke` |
 | ตัวเลือกกติกา | 18 ตัว ทุกตัวมีโค้ดรองรับจริงและมีเทสต์คุม |
@@ -78,14 +78,15 @@ lib/
   nightHints.ts                     บอกว่าปุ่มเป้าหมายใดกดไม่ได้และเพราะอะไร
   stats.ts                          รวมสถิติข้ามเกมจากเกมที่จบแล้ว
   api.ts                        34  แปลง Error เป็น HTTP status
-  client/{api,useGameStream,variants}.ts
+  client/{api,useGameStream,variants,announce}.ts
 scripts/
   build-engine.mjs              72  ต่อ .gs เป็น ES module + การ์ดกัน Apps Script API
   migrate.mjs / ensure-test-db.mjs / run-tests.mjs
   smoke-api.mjs                304  เดินเกมจริงผ่าน HTTP ครบทุกคำสั่ง
   smoke-ui.mjs                 222  เดินเกม 8 คนบน Chromium ขนาดมือถือ
 migrations/001_init.sql, 002_rate_limit.sql
-tests/{engine,storage,publicview,nighthints,stats,voting,pause,ids,ratelimit}.test.js + helpers.js
+tests/{engine,storage,publicview,nighthints,stats,voting,pause,ids,ratelimit,announce}.test.js
+       + helpers.js
 ```
 
 ### ชั้นของสถาปัตยกรรม
@@ -229,6 +230,20 @@ engine ตัดสินจากคะแนนเท่าที่มีใ�
 
 **เพิ่มกฎใน `Validation.gs` หรือ `RuleEngine.gs` เมื่อไหร่ ต้องดูด้วยว่าสี่ไฟล์นี้ต้องตามหรือไม่**
 
+### สิ่งที่ผู้ดำเนินเกมต้องได้เห็นแบบขัดจังหวะ (`lib/client/announce.ts`)
+
+ครูมองโต๊ะ ไม่ได้จ้องมือถือ ข้อมูลสี่อย่างนี้จึงต้องเด้งเป็นกล่องที่ต้องกดรับทราบ
+ไม่ใช่แค่ขึ้นอยู่ในหน้าจอเฉย ๆ
+
+| จังหวะ | เด้งอะไร |
+|---|---|
+| บันทึกการกระทำกลางคืน | คำตอบของบทบาทนั้น เช่น ผู้หยั่งรู้ให้พยักหน้า/ส่ายหน้า (ใช้ข้อความจาก engine ตรง ๆ) |
+| สรุปผลกลางคืน | รายชื่อผู้เสียชีวิตพร้อมสาเหตุ |
+| สรุปผลการลงคะแนน | ใครถูกแขวนคอ หรือทำไมไม่มีใครถูกแขวน |
+
+**ข้อความทั้งหมดมาจาก engine** ไฟล์นี้เลือกว่าจะพูดอันไหนเท่านั้น ไม่ตัดสินเองว่าเกิดอะไรขึ้น
+และการเปิดเผยบทบาทของผู้ตายเคารพ `roleRevealMode` เหมือนหน้าจออื่น
+
 ### ด้านความปลอดภัยที่ต้องคงไว้
 
 - **รหัสเกมและ PIN มาจาก `lib/ids.ts` (CSPRNG)** ไม่ใช่ `uwRandomId()` ของ engine ที่ใช้ `Math.random()`
@@ -282,7 +297,7 @@ snapshot (เฉพาะคำสั่งสำคัญ) → `UPDATE` → `IN
 ## 9. ชุดทดสอบ
 
 ```bash
-npm test              # ต้องได้ ผ่าน 109 / ล้มเหลว 0
+npm test              # ต้องได้ ผ่าน 118 / ล้มเหลว 0
 npm run test:engine   # เฉพาะตรรกะเกม ไม่ต้องมีฐานข้อมูล
 ```
 
@@ -297,6 +312,7 @@ npm run test:engine   # เฉพาะตรรกะเกม ไม่ต้�
 | `tests/pause.test.js` | 3 | พักแล้วนาฬิกาหยุดจริง และเวลาที่หมดไปแล้วไม่ถูกคืน |
 | `tests/ids.test.js` | 3 | รหัสเกม/PIN จาก CSPRNG กระจายทั่วและไม่ซ้ำ |
 | `tests/ratelimit.test.js` | 6 | โควตาต่อ key, หน้าต่างหมดอายุ, ฐานข้อมูลล่มต้องไม่ล็อกผู้ใช้ |
+| `tests/announce.test.js` | 9 | ข้อความที่เด้งให้ผู้ดำเนินเกมอ่าน และการเคารพกติกาเปิดเผยบทบาท |
 
 เทสต์ชั้นจัดเก็บข้อมูลรันบน **Postgres จริง** ไม่ใช่ของจำลอง เพราะของจำลองไม่รู้จัก
 `SELECT ... FOR UPDATE` ซึ่งเป็นสิ่งที่เทสต์กลุ่มนี้ตั้งใจพิสูจน์
@@ -307,7 +323,7 @@ npm run test:engine   # เฉพาะตรรกะเกม ไม่ต้�
 ```bash
 npm run build && npm start &
 npm run smoke      # ยิง API ครบทุกคำสั่ง 22 ตัว + SSE + แอดมิน + สถิติ (42 ข้อ)
-npm run smoke:ui   # Chromium 360px เดินเกม 8 คนจนประกาศผู้ชนะ + พัก + แอดมิน + สถิติ (30 ข้อ)
+npm run smoke:ui   # Chromium 360px เดินเกม 8 คนจนประกาศผู้ชนะ + พัก + แอดมิน + สถิติ (37 ข้อ)
 ```
 
 `smoke-ui` ต้องมี Chromium ถ้าเครื่องมี build ที่ไม่ตรงกับแพ็กเกจ ให้ชี้ด้วย
@@ -318,7 +334,7 @@ npm run smoke:ui   # Chromium 360px เดินเกม 8 คนจนปร�
 ```bash
 npm run build:engine     # การ์ดกัน Apps Script API + ตรวจรายชื่อ export
 npx tsc --noEmit         # type ทั้งโปรเจกต์
-npm test                 # 109/109
+npm test                 # 118/118
 ```
 
 ---

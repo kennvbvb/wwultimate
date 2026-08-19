@@ -60,6 +60,23 @@ export default function AssignScreen({ vm, catalog, onSaveAssignments, onStartGa
     }, 1200);
   };
 
+  /* How many of each card are still unassigned. A card that is fully dealt is
+   * dropped from every other player's list — on a 16-player table, scrolling
+   * past roles that are already gone is how a card ends up recorded twice. */
+  const usedByRole = useMemo(() => {
+    const used: Record<string, number> = {};
+    for (const p of vm.players) {
+      const roleId = assign[p.playerId];
+      if (roleId) used[roleId] = (used[roleId] || 0) + 1;
+    }
+    return used;
+  }, [assign, vm.players]);
+
+  const optionsFor = (playerId: string) => vm.selectedRoles.filter((s) => {
+    if (assign[playerId] === s.roleId) return true;   /* keep this player's own pick */
+    return (usedByRole[s.roleId] || 0) < s.count;
+  });
+
   /* Same arithmetic the server does, so the status line never waits on a round trip. */
   const status = useMemo(() => {
     const quota: Record<string, number> = {};
@@ -124,10 +141,15 @@ export default function AssignScreen({ vm, catalog, onSaveAssignments, onStartGa
         <h5>📋 การ์ดที่ต้องหยิบจากกล่อง</h5>
         {vm.selectedRoles.map((s) => {
           const d = roleById[s.roleId];
+          const left = s.count - (usedByRole[s.roleId] || 0);
           return (
-            <div className="prow" key={s.roleId}>
+            <div className={'prow' + (left === 0 ? ' dealt' : '')} key={s.roleId}>
               <div className="seatno">{s.count}</div>
-              <div className="pname">{d?.th || s.roleId}<div className="hint">{d?.en || ''}</div></div>
+              <div className="pname">
+                {d?.th || s.roleId}
+                <div className="hint">{d?.en || ''}</div>
+              </div>
+              <span className="badge2">{left === 0 ? 'บันทึกครบแล้ว' : 'เหลือ ' + left}</span>
               <span className={'tag t-' + (d?.team || 'VILLAGE')}>{d?.teamTh || ''}</span>
             </div>
           );
@@ -154,9 +176,14 @@ export default function AssignScreen({ vm, catalog, onSaveAssignments, onStartGa
             <select className="inp vpick" value={assign[p.playerId] || ''}
                     onChange={(e) => setOne(p.playerId, e.target.value)}>
               <option value="">— ยังไม่ระบุ —</option>
-              {vm.selectedRoles.map((s) => (
-                <option key={s.roleId} value={s.roleId}>{roleById[s.roleId]?.th || s.roleId}</option>
-              ))}
+              {optionsFor(p.playerId).map((s) => {
+                const left = s.count - (usedByRole[s.roleId] || 0);
+                return (
+                  <option key={s.roleId} value={s.roleId}>
+                    {(roleById[s.roleId]?.th || s.roleId) + (s.count > 1 ? ' (เหลือ ' + left + ')' : '')}
+                  </option>
+                );
+              })}
             </select>
           </div>
         ))}

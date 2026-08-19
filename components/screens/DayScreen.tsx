@@ -10,7 +10,7 @@ interface Props {
   onOpenNomination: () => void;
   onCloseNomination: (nomineeIds: string[]) => void;
   onSubmitVotes: (votes: Record<string, string>) => Promise<boolean>;
-  onResolveVote: (choice?: string) => void;
+  onResolveVote: (choice?: string) => void | Promise<void>;
   onForceEndDay: () => void;
   onModeratorKill: (playerId: string, reason: string) => void;
   onResolvePrompt: (promptId: string, targetId: string | null) => void;

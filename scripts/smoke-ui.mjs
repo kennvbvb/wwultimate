@@ -95,12 +95,17 @@ try {
   ok(deck.length === 8, 'รายการการ์ดที่ต้องหยิบมี 8 ใบ');
 
   const selects = await page.locator('.card2:has-text("บันทึกการแจกการ์ด") select').all();
+  const firstOptionCount = (await selects[0].locator('option').allTextContents()).length;
   for (let i = 0; i < selects.length; i++) {
     const options = await selects[i].locator('option').allTextContents();
     /* the checklist name starts with the Thai label, options carry the same */
-    const want = options.find((o) => deck[i].startsWith(o.trim())) || options[1];
+    const want = options.find((o) => deck[i].startsWith(o.trim().split(' (')[0])) || options[1];
     await selects[i].selectOption({ label: want });
   }
+  const lastOptionCount = (await selects[selects.length - 1].locator('option').allTextContents()).length;
+  ok(lastOptionCount < firstOptionCount,
+     'การ์ดที่บันทึกครบแล้วหายไปจากตัวเลือกของคนถัด ๆ ไป (' + firstOptionCount + ' → ' + lastOptionCount + ')');
+  ok((await page.locator('.prow.dealt').count()) > 0, 'รายการการ์ดขึ้นว่าบันทึกครบแล้ว');
   await page.waitForTimeout(1600);
   ok(await page.locator('text=พร้อมเริ่มเกม').isVisible(), 'ระบบยืนยันว่าการ์ดตรงกับผู้เล่นครบ');
 
@@ -112,6 +117,7 @@ try {
 
   /* ---- night 1 ---- */
   let guard = 0;
+  let answers = 0;
   let lastGuarded = '';
   while (await page.locator('.step-card .step-role').count() && guard++ < 30) {
     const title = (await page.locator('.step-role').textContent()).trim();
@@ -126,11 +132,28 @@ try {
       lastGuarded = (await picked.textContent()).split('ที่นั่ง')[0].trim();
     }
     await page.click('.step-card button:has-text("บันทึก")');
-    await page.waitForTimeout(250);
+    await page.waitForTimeout(300);
+
+    /* roles that learn something (seer, P.I., masons…) must say it out loud */
+    if (await page.locator('.dlg-lines').count()) {
+      answers++;
+      if (title.includes('ผู้หยั่งรู้')) {
+        const answer = await page.locator('.dlg-lines').textContent();
+        ok(/พยักหน้า|ส่ายหน้า/.test(answer), 'ผู้หยั่งรู้ได้คำตอบว่าเป็นภัยหรือไม่: ' + answer.trim());
+      }
+      await page.click('.dlg button:has-text("รับทราบ")');
+      await page.waitForTimeout(200);
+    }
   }
   ok(guard < 30, 'เดินครบทุกขั้นตอนกลางคืน (' + guard + ' ขั้น)');
+  ok(answers > 0, 'มีขั้นตอนที่เด้งคำตอบให้ผู้ดำเนินเกม ' + answers + ' ครั้ง');
   await page.click('button:has-text("สรุปผลกลางคืน")');
-  await page.waitForTimeout(600);
+  await page.waitForSelector('.dlg-lines');
+  const dawnText = await page.locator('.dlg').textContent();
+  ok(/รุ่งเช้าวันที่ 1|สรุปผลคืนที่ 1/.test(dawnText), 'สรุปคืนแล้วเด้งประกาศผลของคืนนั้น');
+  ok(/เสียชีวิต|ไม่มีผู้เสียชีวิต/.test(dawnText), 'ประกาศบอกว่าใครเสียชีวิตบ้าง');
+  await page.click('.dlg button:has-text("รับทราบ")');
+  await page.waitForTimeout(400);
 
   /* a death can fire a trigger — the hunter shoots before the day opens */
   let prompts = 0;
@@ -187,7 +210,11 @@ try {
   }
   ok(await page.locator('.vote-progress.done').isVisible(), 'ลงครบแล้วแถบความคืบหน้าต้องขึ้นเขียว');
   await resolveButton.click();
-  await page.waitForTimeout(800);
+  await page.waitForSelector('.dlg-lines');
+  const lynchText = await page.locator('.dlg').textContent();
+  ok(/ถูกแขวนคอ|ไม่มีใครถูกแขวนคอ/.test(lynchText), 'สรุปโหวตแล้วเด้งประกาศผลการแขวนคอ');
+  await page.click('.dlg button:has-text("รับทราบ")');
+  await page.waitForTimeout(500);
   if (await page.locator('button:has-text("ยิงขึ้นฟ้า")').count()) {
     await page.click('button:has-text("ยิงขึ้นฟ้า")');
     await page.waitForTimeout(400);
@@ -199,6 +226,12 @@ try {
   let checkedGuardHint = false;
   guard = 0;
   while (guard++ < 200) {
+    /* announcements block the screen until acknowledged, by design */
+    if (await page.locator('.dlg button:has-text("รับทราบ")').count()) {
+      await page.click('.dlg button:has-text("รับทราบ")');
+      await page.waitForTimeout(200);
+      continue;
+    }
     const sub = await page.locator('.tb-sub').textContent();
     if (sub.includes('จบเกม')) break;
     if (await page.locator('button:has-text("ยิงขึ้นฟ้า")').count()) {
