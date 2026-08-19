@@ -99,12 +99,13 @@ test('snapshot และการย้อนคำสั่งกลับส�
     'เริ่มเกม', true, (st) => E.startGame(st));
   eq(started.status, 'FIRST_NIGHT', 'เริ่มเกมแล้วเข้าคืนแรก');
 
-  const undone = await S.undoLastCommand(g.gameId);
+  const undone = await S.undoLastCommand({ gameId: g.gameId, action: 'undo' });
   eq(undone.status, 'ROLE_ASSIGNMENT', 'ย้อนกลับไปก่อนเริ่มเกม');
   assert(undone.version > started.version, 'การย้อนคำสั่งต้องเดินเวอร์ชันต่อ ไม่ถอยหลัง');
   assert(undone.timeline.some((t) => t.text.indexOf('ย้อนคำสั่ง') === 0), 'ต้องบันทึกใน timeline');
 
-  await rejects(() => S.undoLastCommand(g.gameId), 'ไม่มี snapshot แล้วต้องย้อนต่อไม่ได้');
+  await rejects(() => S.undoLastCommand({ gameId: g.gameId, action: 'undo' }),
+    'ไม่มี snapshot แล้วต้องย้อนต่อไม่ได้');
 });
 
 test('เก็บ snapshot ไว้ 25 จุดเท่านั้น', async () => {
@@ -249,7 +250,7 @@ test('ย้อนกลับได้ทีละขั้นแม้เป�
     (st) => { E.submitRoleAction(st, step.stepId, [target.playerId], {}); });
   eq(afterAction.night.results.length, 1, 'บันทึกการกระทำไปแล้วหนึ่งขั้น');
 
-  const undone = await S.undoLastCommand(g.gameId);
+  const undone = await S.undoLastCommand({ gameId: g.gameId, action: 'undo' });
   eq(undone.night.results.length, 0, 'ย้อนกลับแล้วการกระทำนั้นต้องหายไป');
   eq(undone.currentStep.stepId, step.stepId, 'และกลับมาอยู่ขั้นตอนเดิม');
   assert(undone.lastUndoneLabel.indexOf('บันทึกการกระทำกลางคืน') === 0,
@@ -269,4 +270,25 @@ test('ย้อนกลับได้ทีละขั้นแม้เป�
   const reopened = await S.reopenRoleAssignment(
     { gameId: g.gameId, expectedVersion: current.version, action: 'reopenRoleAssignment' }, 'ทดสอบ');
   eq(reopened.status, 'ROLE_ASSIGNMENT', 'จึงยังกลับไปแก้การแจกบทบาทได้');
+});
+
+test('กดย้อนกลับรัว ๆ ด้วยคีย์เดิม ต้องย้อนแค่ขั้นเดียว', async () => {
+  const g = await newStoredGame(5);
+  let view = await S.moderatorView(g.gameId);
+
+  for (let i = 0; i < 3; i++) {
+    view = await S.runCommand({ gameId: g.gameId, expectedVersion: view.version, action: 'noop' },
+      'คำสั่งทดสอบ ' + i, true, (st) => { st.title = 'รอบ ' + i; });
+  }
+  eq(view.title, 'รอบ 2', 'ทำมาแล้วสามขั้น');
+
+  const cmd = { gameId: g.gameId, expectedVersion: view.version, idempotencyKey: 'undo-1', action: 'undo' };
+  const first = await S.undoLastCommand(cmd);
+  const second = await S.undoLastCommand(cmd);
+  eq(second.version, first.version, 'ส่งคีย์เดิมซ้ำต้องได้ผลเดิม ไม่ย้อนต่อ');
+  eq(second.title, first.title, 'และสถานะต้องไม่ถอยเพิ่ม');
+
+  await rejects(
+    () => S.undoLastCommand({ gameId: g.gameId, expectedVersion: view.version, action: 'undo' }),
+    'ส่งเวอร์ชันเก่ามาย้อนซ้ำต้องถูกปฏิเสธ');
 });

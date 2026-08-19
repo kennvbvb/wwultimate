@@ -1,5 +1,6 @@
 import * as E from './engine.generated.js';
 import { pauseWithClock, resumeWithClock } from './pause.ts';
+import { checkPlayerNames } from './players.ts';
 import { assertTieChoice, assertVoteReady } from './voting.ts';
 import type { Command, GameState } from './types.ts';
 
@@ -24,7 +25,14 @@ interface Handler {
 const HANDLERS: Record<string, Handler> = {
   setPlayers: {
     label: 'ตั้งรายชื่อผู้เล่น', high: false,
-    fn: (s, c) => { E.setPlayers(s, (c.playerNames as string[]) || []); }
+    fn: (s, c) => {
+      /* Trimmed and checked here rather than trusting the screen: the API is
+       * reachable directly, and a blank name becomes "ผู้เล่น 7" deep inside
+       * the engine where nobody sees it. */
+      const { names, duplicates } = checkPlayerNames(c.playerNames || []);
+      E.setPlayers(s, names);
+      s.__duplicateNames = duplicates;
+    }
   },
   configureGame: {
     label: 'ตั้งค่ากติกาและชุดบทบาท', high: false,

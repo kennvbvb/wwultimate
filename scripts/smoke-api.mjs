@@ -8,7 +8,10 @@
  */
 const BASE = process.env.SMOKE_BASE || 'http://127.0.0.1:3000';
 
-let cookie = '';
+/* Cookies are kept per name: creating a game sets the moderator session, and a
+ * single string would silently drop the admin one we still need. */
+const jar = new Map();
+const cookieHeader = () => Array.from(jar.entries()).map(([k, v]) => k + '=' + v).join('; ');
 const used = new Set();
 let checks = 0;
 
@@ -29,12 +32,14 @@ async function call(path, init = {}) {
     headers: {
       'content-type': 'application/json',
       'x-forwarded-for': RUN_IP,
-      ...(cookie ? { cookie } : {}),
+      ...(jar.size ? { cookie: cookieHeader() } : {}),
       ...(init.headers || {})
     }
   });
-  const setCookie = res.headers.getSetCookie?.() || [];
-  for (const c of setCookie) cookie = c.split(';')[0];
+  for (const raw of res.headers.getSetCookie?.() || []) {
+    const [name, ...rest] = raw.split(';')[0].split('=');
+    jar.set(name, rest.join('='));
+  }
   const text = await res.text();
   let body;
   try { body = JSON.parse(text); } catch { body = text; }
@@ -238,16 +243,16 @@ gameId = originalGameId;
 version = originalVersion;
 
 /* ---- auth ---- */
-const savedCookie = cookie;
-cookie = '';
+const savedJar = new Map(jar);
+jar.clear();
 const denied = await call('/api/game/' + gameId);
 ok(denied.status === 401, 'ไม่มี cookie เข้าจอผู้ดำเนินเกมไม่ได้');
 const badPin = await call('/api/auth/login', { method: 'POST', body: JSON.stringify({ gameId, pin: '0000-0000' }) });
 ok(badPin.status === 401, 'PIN ผิดเข้าไม่ได้');
-cookie = '';
 const goodPin = await call('/api/auth/login', { method: 'POST', body: JSON.stringify({ gameId, pin }) });
 ok(goodPin.status === 200 && goodPin.body.gameId === gameId, 'PIN ถูกต้องเข้าได้');
-cookie = savedCookie;
+jar.clear();
+for (const [k, v] of savedJar) jar.set(k, v);
 
 /* ---- SSE: a command in one place must reach a listener within two seconds ---- */
 const live = await call('/api/games', { method: 'POST', body: JSON.stringify({ playerNames: names(4), title: 'ทดสอบสตรีม' }) });
@@ -294,8 +299,8 @@ const missing = listCommands().filter((c) => !used.has(c));
 ok(missing.length === 0, 'ยิงครบทุกคำสั่ง (' + used.size + ' คำสั่ง)' + (missing.length ? ' ขาด: ' + missing : ''));
 
 /* ---- admin: edit a role, then confirm a new game sees the change ---- */
-const adminCookieBefore = cookie;
-cookie = '';
+const moderatorJar = new Map(jar);
+jar.clear();
 const noAuth = await call('/api/admin/roles');
 ok(noAuth.status === 401, 'หน้าแอดมินต้องใส่รหัสผ่านก่อน');
 
@@ -332,6 +337,35 @@ ok(stats.status === 200 && stats.body.games >= 1, 'หน้าสถิติ�
 ok(Array.isArray(stats.body.teamWins) && stats.body.players.length > 0, 'สถิติมีทั้งฝ่ายที่ชนะและรายผู้เล่น');
 ok(stats.body.recent.every((g) => g.winnersTh), 'ทุกเกมในรายการมีผลแพ้ชนะกำกับ');
 
-cookie = adminCookieBefore;
+/* ---- health, security headers and retention ---- */
+const health = await call('/api/health');
+ok(health.status === 200 && health.body.ok === true && health.body.db === 'up',
+   'health check บอกว่าระบบและฐานข้อมูลพร้อม');
+
+const headerRes = await fetch(BASE + '/');
+const csp = headerRes.headers.get('content-security-policy') || '';
+ok(/frame-ancestors 'none'/.test(csp), 'CSP ห้ามฝังหน้าเว็บใน iframe');
+ok(headerRes.headers.get('x-content-type-options') === 'nosniff', 'มี X-Content-Type-Options');
+ok(!!headerRes.headers.get('referrer-policy'), 'มี Referrer-Policy');
+
+const retention = await call('/api/admin/retention');
+ok(retention.status === 200 && typeof retention.body.games === 'number',
+   'หน้าแอดมินดูปริมาณข้อมูลที่เก็บไว้ได้');
+
+const cleaned = await call('/api/admin/retention', { method: 'POST' });
+ok(cleaned.status === 200 && typeof cleaned.body.idempotency === 'number',
+   'สั่งล้างข้อมูลที่หมดอายุได้');
+
+/* a throwaway game, created then deleted, proves the delete path end to end */
+const doomed = await call('/api/games', {
+  method: 'POST', body: JSON.stringify({ playerNames: names(3), title: 'เกมสำหรับลบทิ้ง' })
+});
+const removed = await call('/api/admin/games/' + doomed.body.gameId, { method: 'DELETE' });
+ok(removed.status === 200, 'ลบเกมจากหน้าแอดมินได้');
+const gone = await call('/api/public/' + doomed.body.gameId);
+ok(gone.status === 404, 'ลบแล้วเปิดจอสาธารณะของเกมนั้นไม่ได้อีก');
+
+jar.clear();
+for (const [k, v] of moderatorJar) jar.set(k, v);
 
 console.log('\nผ่านการตรวจ ' + checks + ' ข้อ');

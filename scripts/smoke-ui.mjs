@@ -71,6 +71,8 @@ try {
   await page.click('button:has-text("จดแล้ว ปิดข้อความนี้")');
 
   /* ---- players ---- */
+  ok(await page.locator('.nb:has-text("กลางคืน")').isDisabled(),
+     'ยังไม่เริ่มเกม แท็บกลางคืนต้องกดไม่ได้');
   await page.click('.nb:has-text("ผู้เล่น")');
   ok(await page.locator('.seat-chip').count() === 8, 'วงกลมที่นั่งมี 8 คน');
   await page.click('button:has-text("บันทึกรายชื่อและไปเลือกบทบาท")');
@@ -116,6 +118,8 @@ try {
   await page.click('.dlg button:has-text("เริ่มเลย")');
   await page.waitForSelector('.step-card');
   ok((await page.locator('.tb-sub').textContent()).includes('คืนแรก'), 'เข้าสู่คืนแรกแล้ว');
+  ok(await page.locator('.nb:has-text("บทบาท")').isDisabled(),
+     'เริ่มเกมแล้วแท็บเลือกบทบาทต้องกดไม่ได้');
   await shot('night');
 
   /* ---- night 1 ---- */

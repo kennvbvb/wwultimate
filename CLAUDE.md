@@ -29,7 +29,7 @@
 | หัวข้อ | สถานะ |
 |---|---|
 | เวอร์ชัน | 2.0.0 (ย้ายจาก Google Apps Script 1.0.0 มาแล้วครบทุกเฟส) |
-| ชุดทดสอบ | **ผ่าน 122 / ล้มเหลว 0** (`npm test`) |
+| ชุดทดสอบ | **ผ่าน 139 / ล้มเหลว 0** (`npm test`) |
 | บทบาท | ครบ 46 (Core 34 / Wolfpack 6 / Hunting Party 6) |
 | คำสั่งที่หน้าเว็บสั่งได้ | 22 ตัว ทุกตัวมีปุ่มเรียกจากหน้าจอและถูกยิงใน `npm run smoke` |
 | ตัวเลือกกติกา | 18 ตัว ทุกตัวมีโค้ดรองรับจริงและมีเทสต์คุม |
@@ -56,7 +56,8 @@ app/
     public/[gameId]/route.ts        GET view model สาธารณะ (ไม่ต้อง auth)
     stream/[gameId]/route.ts     78  SSE ส่งเฉพาะเลขเวอร์ชัน
     auth/{login,logout}/route.ts    ยืนยัน PIN → cookie
-    admin/{login,roles,stats}/route.ts  หน้าแอดมินและสถิติ
+    admin/{login,roles,stats,games,retention}/route.ts  แอดมิน สถิติ และงานล้างข้อมูล
+    health/route.ts                 GET liveness + ตรวจฐานข้อมูล (ไม่ต้อง auth)
 components/
   ui.tsx                       174  Loading, PrivacyCover, Toast, Dialog, Modal
   PublicScreen.tsx              74
@@ -79,15 +80,17 @@ lib/
   nightHints.ts                     บอกว่าปุ่มเป้าหมายใดกดไม่ได้และเพราะอะไร
   stats.ts                          รวมสถิติข้ามเกมจากเกมที่จบแล้ว
   api.ts                        34  แปลง Error เป็น HTTP status
-  client/{api,useGameStream,variants,announce,chime}.ts
+  players.ts                        ตรวจชื่อผู้เล่น: ตัดช่องว่าง ห้ามว่าง เตือนชื่อซ้ำ
+  retention.ts                      ล้างข้อมูลหมดอายุ ปิดเกมค้าง ลบเกมถาวร
+  client/{api,useGameStream,variants,announce,chime,nav}.ts
 scripts/
   build-engine.mjs              72  ต่อ .gs เป็น ES module + การ์ดกัน Apps Script API
   migrate.mjs / ensure-test-db.mjs / run-tests.mjs
   smoke-api.mjs                304  เดินเกมจริงผ่าน HTTP ครบทุกคำสั่ง
   smoke-ui.mjs                 222  เดินเกม 8 คนบน Chromium ขนาดมือถือ
-migrations/001_init.sql, 002_rate_limit.sql
+migrations/001_init.sql, 002_rate_limit.sql, 003_retention.sql
 tests/{engine,storage,publicview,nighthints,stats,voting,pause,ids,ratelimit,announce,
-       chime}.test.js + helpers.js
+       chime,players,nav,retention}.test.js + helpers.js
 ```
 
 ### ชั้นของสถาปัตยกรรม
@@ -246,6 +249,15 @@ engine ตัดสินจากคะแนนเท่าที่มีใ�
 **ข้อความทั้งหมดมาจาก engine** ไฟล์นี้เลือกว่าจะพูดอันไหนเท่านั้น ไม่ตัดสินเองว่าเกิดอะไรขึ้น
 และการเปิดเผยบทบาทของผู้ตายเคารพ `roleRevealMode` เหมือนหน้าจออื่น
 
+### เรื่องข้อมูลและการดูแลระบบ
+
+- **`outcome` ในตาราง `games`** แยกเกมที่เล่นจบจริง (`completed`) ออกจากเกมที่สั่งจบมือ
+  (`manual_end`) และเกมที่ถูกทิ้งค้างเกิน 30 วัน (`abandoned`)
+  **สถิตินับเฉพาะ `completed`** ไม่งั้นอัตราชนะจะถูกถ่วงด้วยเกมที่ไม่มีผู้ชนะ
+- **`lib/retention.ts` ไม่ทำงานเอง** — แอดมินกดเองที่ `/admin` เพราะแต่ละโรงเรียนมีจังหวะต่างกัน
+  ระบบเก็บชื่อเด็กจริง จึงต้องลบได้และต้องลบให้หมดทั้ง events/snapshots/idempotency
+- **`/api/health`** ตรวจฐานข้อมูลจริง ใช้กับ uptime monitor ได้ และต้องไม่บอกรายละเอียดภายใน
+
 ### ด้านความปลอดภัยที่ต้องคงไว้
 
 - **รหัสเกมและ PIN มาจาก `lib/ids.ts` (CSPRNG)** ไม่ใช่ `uwRandomId()` ของ engine ที่ใช้ `Math.random()`
@@ -254,6 +266,9 @@ engine ตัดสินจากคะแนนเท่าที่มีใ�
   ตอนนี้อุปกรณ์จำเกมของตัวเองใน localStorage และแอดมินดูรายการเต็มได้ที่ `/api/admin/games`
 - **ล็อกอินตอบข้อความเดียวกันทั้งกรณีไม่พบเกมและ PIN ผิด** ไม่งั้นฟอร์มล็อกอินกลายเป็นเครื่องมือหารหัสเกม
 - **rate limit อยู่ในฐานข้อมูล ไม่ใช่หน่วยความจำ** เพราะ instance ของ Vercel ไม่แชร์ค่ากัน
+- **security headers อยู่ใน `next.config.mjs`** — CSP ห้าม `frame-ancestors` เด็ดขาด
+  (จอผู้ดำเนินเกมถูกฝัง iframe ไม่ได้) และ `img-src` ต้องอนุญาต `data:` เพราะ QR วาดจาก data URL
+- **ชื่อผู้เล่นถูกตรวจที่เซิร์ฟเวอร์** (`lib/players.ts`) ไม่ใช่แค่หน้าจอ เพราะ API เรียกตรงได้
 
 ### สิ่งที่ระบบไม่มีอีกแล้วหลังย้าย
 
@@ -301,7 +316,7 @@ snapshot (เฉพาะคำสั่งสำคัญ) → `UPDATE` → `IN
 ## 9. ชุดทดสอบ
 
 ```bash
-npm test              # ต้องได้ ผ่าน 122 / ล้มเหลว 0
+npm test              # ต้องได้ ผ่าน 139 / ล้มเหลว 0
 npm run test:engine   # เฉพาะตรรกะเกม ไม่ต้องมีฐานข้อมูล
 ```
 
@@ -318,6 +333,9 @@ npm run test:engine   # เฉพาะตรรกะเกม ไม่ต้�
 | `tests/ratelimit.test.js` | 6 | โควตาต่อ key, หน้าต่างหมดอายุ, ฐานข้อมูลล่มต้องไม่ล็อกผู้ใช้ |
 | `tests/announce.test.js` | 9 | ข้อความที่เด้งให้ผู้ดำเนินเกมอ่าน และการเคารพกติกาเปิดเผยบทบาท |
 | `tests/chime.test.js` | 3 | จังหวะที่นาฬิกาต้องส่งเสียงเตือน (ครั้งเดียวต่อเส้น) |
+| `tests/players.test.js` | 4 | ตัดช่องว่าง ห้ามชื่อว่าง และตรวจชื่อซ้ำ |
+| `tests/nav.test.js` | 7 | แท็บที่กดได้ในแต่ละช่วงของเกม |
+| `tests/retention.test.js` | 5 | ลบเกมแล้วต้องไม่เหลือข้อมูล และเกมค้าง/สั่งจบมือไม่เข้าสถิติ |
 
 เทสต์ชั้นจัดเก็บข้อมูลรันบน **Postgres จริง** ไม่ใช่ของจำลอง เพราะของจำลองไม่รู้จัก
 `SELECT ... FOR UPDATE` ซึ่งเป็นสิ่งที่เทสต์กลุ่มนี้ตั้งใจพิสูจน์
@@ -327,8 +345,8 @@ npm run test:engine   # เฉพาะตรรกะเกม ไม่ต้�
 
 ```bash
 npm run build && npm start &
-npm run smoke      # ยิง API ครบทุกคำสั่ง 22 ตัว + SSE + แอดมิน + สถิติ (42 ข้อ)
-npm run smoke:ui   # Chromium 360px เดินเกม 8 คนจนประกาศผู้ชนะ + พัก + แอดมิน + สถิติ (43 ข้อ)
+npm run smoke      # ยิง API ครบทุกคำสั่ง + SSE + แอดมิน + สถิติ + health/headers/retention (50 ข้อ)
+npm run smoke:ui   # Chromium 360px เดินเกม 8 คนจนประกาศผู้ชนะ + พัก + แอดมิน + สถิติ (45 ข้อ)
 ```
 
 `smoke-ui` ต้องมี Chromium ถ้าเครื่องมี build ที่ไม่ตรงกับแพ็กเกจ ให้ชี้ด้วย
@@ -339,7 +357,7 @@ npm run smoke:ui   # Chromium 360px เดินเกม 8 คนจนปร�
 ```bash
 npm run build:engine     # การ์ดกัน Apps Script API + ตรวจรายชื่อ export
 npx tsc --noEmit         # type ทั้งโปรเจกต์
-npm test                 # 122/122
+npm test                 # 139/139
 ```
 
 ---
@@ -356,15 +374,12 @@ npm test                 # 122/122
 6. แม่มดมีขวดยากี่ขวด ใช้ได้กี่ครั้ง
 7. สมุนหมาป่าแจกเป็นการ์ดหรือให้หมาป่าเลือกภายหลัง
 
-### จากรายงานตรวจความพร้อม (18 ส.ค. 2026) — P1 ที่ยังไม่ทำ
+### จากรายงานตรวจความพร้อม (18 ส.ค. 2026) — ที่ยังไม่ทำ
 
 1. แสดง warnings ตอนเลือกชุดบทบาทแล้วให้ยืนยัน (ตอนนี้ engine คำนวณไว้แต่หน้าจอไม่แสดง)
-2. ตรวจชื่อผู้เล่นซ้ำ/ว่างฝั่งเซิร์ฟเวอร์ (สถิติจับคู่ตามชื่อ จึงรวมคนผิดได้)
-3. CSP และ security headers ใน `next.config.mjs`
-4. retention/ลบข้อมูล: `idempotency`, `events`, `snapshots` และเกมค้าง ยังไม่มีงานล้าง
-5. health check, structured log, error alert
-6. undo ยังไม่ผูก `expectedVersion`/idempotency key
-7. แยกผลเกมเป็น `completed` / `abandoned` เพื่อไม่ให้เกมที่สั่งจบมือบิดสถิติ
+2. structured log และ error alert (มี `/api/health` แล้ว แต่ยังไม่มีที่รวม log)
+3. ซ้อม backup/restore ของ Neon (เป็นงานฝั่งผู้ดูแล ไม่ใช่โค้ด)
+4. preset ชุดบทบาทแยกตามระดับความยาก/อายุผู้เล่น
 
 ### ไอเดียที่ยังไม่ทำ (ไม่เร่ง)
 

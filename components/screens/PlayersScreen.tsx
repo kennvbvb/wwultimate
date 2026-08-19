@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { ModeratorViewModel } from '@/lib/types.ts';
+import { findDuplicateNames, normaliseName } from '@/lib/players.ts';
 
 /**
  * Seat order is not cosmetic: P.I., Mad Bomber and Big Bad Wolf all read the
@@ -14,6 +15,8 @@ export default function PlayersScreen({ vm, onSave }: {
 }) {
   const [names, setNames] = useState<string[]>(vm.players.map((p) => p.name));
   const [adding, setAdding] = useState('');
+  const cleaned = names.map(normaliseName).filter(Boolean);
+  const duplicates = findDuplicateNames(cleaned);
 
   useEffect(() => { setNames(vm.players.map((p) => p.name)); }, [vm.players]);
 
@@ -59,8 +62,17 @@ export default function PlayersScreen({ vm, onSave }: {
           }}>เพิ่ม</button>
         </div>
 
-        <button className="btn-p w-100 mt-3" disabled={names.filter((n) => n.trim()).length < 3}
-                onClick={() => onSave(names.map((n) => n.trim()).filter(Boolean))}>
+        {duplicates.length > 0 && (
+          <div className="offline mt-2">
+            ⚠️ มีชื่อซ้ำกัน: {duplicates.join(', ')} — ตอนโหวตจะแยกไม่ออกว่าใครเป็นใคร
+            แนะนำให้เติมอักษรย่อของนามสกุล (ยังบันทึกต่อได้ถ้าตั้งใจ)
+          </div>
+        )}
+        {cleaned.length !== names.length && (
+          <div className="hint mt-2">มีช่องที่เว้นว่างไว้ ระบบจะไม่นับช่องเหล่านั้น</div>
+        )}
+        <button className="btn-p w-100 mt-3" disabled={cleaned.length < 3}
+                onClick={() => onSave(cleaned)}>
           บันทึกรายชื่อและไปเลือกบทบาท
         </button>
       </div>

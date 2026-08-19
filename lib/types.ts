@@ -178,6 +178,8 @@ export interface ModeratorViewModel {
   paused?: import('./pause.ts').PauseInfo | null;
   /** Only on the response to an undo: the label of the command just reverted. */
   lastUndoneLabel?: string;
+  /** Names that appear more than once — the moderator decides whether to fix them. */
+  duplicateNames?: string[];
   /** Only present on the screen that creates a game — never persisted to a client. */
   moderatorPin?: string;
 }

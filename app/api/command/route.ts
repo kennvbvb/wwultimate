@@ -20,7 +20,7 @@ export async function POST(req: Request) {
 
     const cmd = body as unknown as Command;
 
-    if (action === 'undo') return json(await undoLastCommand(gameId));
+    if (action === 'undo') return json(await undoLastCommand(cmd));
 
     /* Not a plain mutation: once the game has started this restores the
      * snapshot from before the first night (see lib/storage.ts). */

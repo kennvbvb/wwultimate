@@ -4,6 +4,7 @@ import * as E from './engine.generated.js';
 import { query, withTransaction } from './db.ts';
 import { ensureCatalogLoaded } from './catalog.ts';
 import { secureGameId, securePin } from './ids.ts';
+import { checkPlayerNames } from './players.ts';
 import { nightTargetHints } from './nightHints.ts';
 import { pauseInfo } from './pause.ts';
 import { voteProgress } from './voting.ts';
@@ -46,6 +47,18 @@ function reviveState(raw: GameState): GameState {
 function idemKey(gameId: string, key: string): string { return gameId + ':' + key; }
 
 /**
+ * How a game ended, kept out of the state blob so statistics can filter on it.
+ * A game the moderator closed by hand has no winning team, and counting it as a
+ * loss for everybody would quietly skew every win rate on the stats screen.
+ */
+function outcomeOf(state: GameState): string | null {
+  if (state.status !== 'FINISHED') return null;
+  const teams = state.winners?.primaryWinningTeams || [];
+  const individuals = state.winners?.individualWinners || [];
+  return teams.length || individuals.length ? 'completed' : 'manual_end';
+}
+
+/**
  * The moderator view plus the per-target hints the night screen greys names out
  * with. Built in one place so every path that returns a view — command, undo,
  * reload, rematch — carries them; a screen that got the view from a command
@@ -56,6 +69,8 @@ function moderatorViewOf(state: GameState): ModeratorViewModel {
   view.targetHints = nightTargetHints(state, view.currentStep);
   view.voteProgress = voteProgress(state);
   view.paused = pauseInfo(state);
+  const duplicates = state.__duplicateNames;
+  if (Array.isArray(duplicates) && duplicates.length) view.duplicateNames = duplicates as string[];
   return view;
 }
 
@@ -131,15 +146,19 @@ export interface CreatedGame { view: ModeratorViewModel; moderatorPin: string; }
 export async function createGame(payload: {
   playerNames?: string[]; title?: string; deckProfile?: { packs: string[] };
 }): Promise<CreatedGame> {
-  const names = payload.playerNames || [];
-  if (names.length < 3) throw new GameError('ต้องมีผู้เล่นอย่างน้อย 3 คน');
-  if (names.length > 40) throw new GameError('รองรับผู้เล่นไม่เกิน 40 คน');
+  let names: string[];
+  let duplicates: string[];
+  try {
+    ({ names, duplicates } = checkPlayerNames(payload.playerNames || []));
+  } catch (e) {
+    throw new GameError((e as Error).message);
+  }
   await ensureCatalogLoaded();
 
   /* Retry only exists for the astronomically unlikely id collision; anything
    * else is a real failure and propagates on the first attempt. */
   for (let attempt = 0; ; attempt++) {
-    const state = E.createGameState(payload);
+    const state = E.createGameState({ ...payload, playerNames: names });
     const pin = replaceGeneratedIdentifiers(state);
     const pinHash = await bcrypt.hash(normalisePin(pin), BCRYPT_ROUNDS);
 
@@ -157,7 +176,9 @@ export async function createGame(payload: {
       throw e;
     }
 
-    return { view: moderatorViewOf(state), moderatorPin: pin };
+    const view = moderatorViewOf(state);
+    view.duplicateNames = duplicates;
+    return { view, moderatorPin: pin };
   }
 }
 
@@ -293,11 +314,12 @@ export async function runCommand(
     state.version = baseVersion + 1;
     state.updatedAt = E.uwNow();
 
+    const finished = state.status === 'FINISHED';
     const upd = await client.query(
       'UPDATE games SET state = $1, version = $2, status = $3, title = $4, finished = $5, ' +
-      'updated_at = now() WHERE game_id = $6 AND version = $7',
+      'outcome = $6, updated_at = now() WHERE game_id = $7 AND version = $8',
       [JSON.stringify(stripForStorage(state)), state.version, state.status, state.title,
-       state.status === 'FINISHED', cmd.gameId, baseVersion]);
+       finished, outcomeOf(state), cmd.gameId, baseVersion]);
     if (upd.rowCount === 0) {
       throw new GameError('ข้อมูลไม่ตรงกัน มีคำสั่งอื่นแก้ไขเกมนี้ไปแล้ว กรุณารีเฟรชหน้าจอ');
     }
@@ -316,17 +338,32 @@ export async function runCommand(
   return view;
 }
 
-/** Undo restores the snapshot taken before the last high-impact command (spec 14). */
-export async function undoLastCommand(gameId: string): Promise<ModeratorViewModel> {
+/**
+ * Undo restores the snapshot taken before the last recorded command (spec 14).
+ *
+ * It goes through the same contract as every other mutation — version check and
+ * idempotency key — because a double tap used to walk back two steps, and two
+ * moderators on two devices could unwind a whole night between them.
+ */
+export async function undoLastCommand(cmd: Command): Promise<ModeratorViewModel> {
   await ensureCatalogLoaded();
   const view = await withTransaction(async (client) => {
+    if (cmd.idempotencyKey) {
+      const hit = await client.query<{ result: ModeratorViewModel }>(
+        'SELECT result FROM idempotency WHERE key = $1',
+        [idemKey(cmd.gameId, String(cmd.idempotencyKey))]);
+      if (hit.rowCount) return hit.rows[0].result;
+    }
+
     const got = await client.query<{ state: GameState }>(
-      'SELECT state FROM games WHERE game_id = $1 FOR UPDATE', [gameId]);
-    if (!got.rowCount) throw new GameError('ไม่พบเกมรหัส ' + gameId);
+      'SELECT state FROM games WHERE game_id = $1 FOR UPDATE', [cmd.gameId]);
+    if (!got.rowCount) throw new GameError('ไม่พบเกมรหัส ' + cmd.gameId);
     const current = got.rows[0].state;
+    E.assertVersion(current, cmd.expectedVersion as number | undefined);
 
     const snap = await client.query<{ id: string; label: string; state: GameState }>(
-      'SELECT id, label, state FROM snapshots WHERE game_id = $1 ORDER BY id DESC LIMIT 1', [gameId]);
+      'SELECT id, label, state FROM snapshots WHERE game_id = $1 ORDER BY id DESC LIMIT 1',
+      [cmd.gameId]);
     if (!snap.rowCount) throw new GameError('ไม่มี snapshot ให้ย้อนกลับ');
 
     const state = reviveState(snap.rows[0].state);
@@ -337,15 +374,21 @@ export async function undoLastCommand(gameId: string): Promise<ModeratorViewMode
     E.timeline(state, 'undo', 'ย้อนคำสั่ง: ' + (label || 'ไม่ระบุ'));
 
     await client.query(
-      'UPDATE games SET state = $1, version = $2, status = $3, finished = $4, updated_at = now() ' +
-      'WHERE game_id = $5',
+      'UPDATE games SET state = $1, version = $2, status = $3, finished = $4, outcome = $5, ' +
+      'updated_at = now() WHERE game_id = $6',
       [JSON.stringify(stripForStorage(state)), state.version, state.status,
-       state.status === 'FINISHED', gameId]);
+       state.status === 'FINISHED', outcomeOf(state), cmd.gameId]);
     await client.query('DELETE FROM snapshots WHERE id = $1', [snap.rows[0].id]);
     await writeEvents(client, state);
+
     const vm = moderatorViewOf(state);
     /* So the toast can name what was rolled back rather than just "done". */
     vm.lastUndoneLabel = label || '';
+    if (cmd.idempotencyKey) {
+      await client.query(
+        'INSERT INTO idempotency (key, game_id, result) VALUES ($1, $2, $3) ON CONFLICT (key) DO NOTHING',
+        [idemKey(cmd.gameId, String(cmd.idempotencyKey)), cmd.gameId, JSON.stringify(vm)]);
+    }
     return vm;
   });
 
@@ -412,7 +455,7 @@ export async function reopenRoleAssignment(
 
     const upd = await client.query(
       'UPDATE games SET state = $1, version = $2, status = $3, finished = FALSE, ' +
-      'updated_at = now() WHERE game_id = $4 AND version = $5',
+      'outcome = NULL, updated_at = now() WHERE game_id = $4 AND version = $5',
       [JSON.stringify(stripForStorage(state)), state.version, state.status, cmd.gameId, baseVersion]);
     if (upd.rowCount === 0) {
       throw new GameError('ข้อมูลไม่ตรงกัน มีคำสั่งอื่นแก้ไขเกมนี้ไปแล้ว กรุณารีเฟรชหน้าจอ');
@@ -470,13 +513,16 @@ export async function readVersion(gameId: string): Promise<number | null> {
 /* ---------------- cross-game statistics ---------------- */
 
 /**
- * Finished games only. An unfinished game's state names the role of every
- * living player, so it must never reach a summary screen.
+ * Games that actually reached an ending. Two exclusions matter:
+ * unfinished games would expose the role of everyone still alive, and games
+ * that were abandoned or closed by hand never produced a winner, so counting
+ * them would drag every win rate towards zero.
  */
 export async function finishedGames(limit = 500): Promise<FinishedGameRow[]> {
   const res = await query<{ game_id: string; title: string; updated_at: Date; state: GameState }>(
-    'SELECT game_id, title, updated_at, state FROM games ' +
-    'WHERE finished = TRUE ORDER BY updated_at DESC LIMIT $1', [limit]);
+    "SELECT game_id, title, updated_at, state FROM games " +
+    "WHERE finished = TRUE AND COALESCE(outcome, 'completed') = 'completed' " +
+    'ORDER BY updated_at DESC LIMIT $1', [limit]);
   return res.rows.map((r) => ({
     gameId: r.game_id,
     title: r.title,

@@ -4,6 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { UiProvider, useUi } from '@/components/ui';
 
+interface RetentionSummary {
+  games: number; finished: number; abandoned: number; oldestGameAt: string | null;
+  events: number; snapshots: number; idempotency: number;
+}
+
 interface OpenGame {
   gameId: string; title: string; statusTh: string; dayNumber: number; nightNumber: number; updatedAt: string;
 }
@@ -40,6 +45,7 @@ function AdminScreen() {
   const [impactVerified, setImpactVerified] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [openGames, setOpenGames] = useState<OpenGame[]>([]);
+  const [retention, setRetention] = useState<RetentionSummary | null>(null);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -56,6 +62,9 @@ function AdminScreen() {
      * the recovery path for a moderator who lost the game id. */
     const games = await fetch('/api/admin/games');
     if (games.ok) setOpenGames((await games.json()).games || []);
+
+    const stored = await fetch('/api/admin/retention');
+    if (stored.ok) setRetention(await stored.json());
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -207,6 +216,39 @@ function AdminScreen() {
               href="/admin/stats">📊 ดูสถิติข้ามเกม</Link>
       </div>
 
+      {retention && (
+        <div className="card2">
+          <h6>🗄️ ข้อมูลที่เก็บอยู่</h6>
+          <p className="hint">
+            ระบบเก็บชื่อผู้เล่นและประวัติบทบาทไว้ ควรลบเกมเก่าที่ไม่ต้องใช้แล้วเป็นระยะ
+          </p>
+          <div className="prow">
+            <div className="pname">
+              เกมทั้งหมด {retention.games} เกม (จบแล้ว {retention.finished} • ถูกทิ้งค้าง {retention.abandoned})
+              <div className="hint">
+                เหตุการณ์ {retention.events} • จุดย้อนกลับ {retention.snapshots} • คีย์กันคำสั่งซ้ำ {retention.idempotency}
+                {retention.oldestGameAt
+                  ? ' • เกมเก่าสุด ' + new Date(retention.oldestGameAt).toLocaleDateString('th-TH')
+                  : ''}
+              </div>
+            </div>
+          </div>
+          <button className="btn-ghost w-100 mt-2" disabled={busy} onClick={async () => {
+            setBusy(true);
+            try {
+              const res = await fetch('/api/admin/retention', { method: 'POST' });
+              if (!res.ok) { ui.toast((await res.json()).error, 'bad'); return; }
+              const body = await res.json();
+              setRetention(body.summary);
+              ui.toast('ล้างแล้ว: คีย์กันคำสั่งซ้ำ ' + body.idempotency +
+                ' • โควตาหมดอายุ ' + body.rateLimits +
+                ' • ปิดเกมที่ถูกทิ้ง ' + body.abandonedGames, 'good');
+              await load();
+            } finally { setBusy(false); }
+          }}>🧹 ล้างข้อมูลที่หมดอายุ</button>
+        </div>
+      )}
+
       {openGames.length > 0 && (
         <div className="card2">
           <h6>🎲 เกมที่ยังเล่นค้างอยู่</h6>
@@ -224,6 +266,22 @@ function AdminScreen() {
               <a className="btn-ghost" href={'/public/' + g.gameId} target="_blank" rel="noreferrer">
                 จอสาธารณะ
               </a>
+              <button className="btn-r" disabled={busy} onClick={async () => {
+                const res = await ui.confirm({
+                  title: 'ลบเกม ' + (g.title || g.gameId), icon: '🗑️', danger: true,
+                  text: 'ลบเกมนี้พร้อมชื่อผู้เล่น เหตุการณ์ และจุดย้อนกลับทั้งหมด — กู้คืนไม่ได้',
+                  confirmText: 'ลบถาวร'
+                });
+                if (!res.confirmed) return;
+                setBusy(true);
+                try {
+                  const done = await fetch('/api/admin/games/' + encodeURIComponent(g.gameId),
+                    { method: 'DELETE' });
+                  if (!done.ok) { ui.toast((await done.json()).error, 'bad'); return; }
+                  ui.toast('ลบเกมแล้ว', 'good');
+                  await load();
+                } finally { setBusy(false); }
+              }}>ลบ</button>
             </div>
           ))}
         </div>

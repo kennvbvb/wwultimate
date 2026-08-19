@@ -18,6 +18,7 @@ import DayScreen from '@/components/screens/DayScreen';
 import EndScreen from '@/components/screens/EndScreen';
 import PublicScreenCard from '@/components/PublicScreenCard';
 import { playChime, setSoundEnabled, soundEnabled } from '@/lib/client/chime.ts';
+import { availablePages, routeByStatus, type Page } from '@/lib/client/nav.ts';
 
 const LAST_GAME_KEY = 'uw_last_game_v2';
 const RECENT_KEY = 'uw_recent_games_v1';
@@ -42,8 +43,6 @@ function rememberRecent(game: { gameId: string; title: string }): RecentGame[] {
   try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)); } catch { /* private mode */ }
   return next;
 }
-
-type Page = 'home' | 'players' | 'roles' | 'assign' | 'night' | 'day' | 'end';
 
 const NAV: { key: Page; label: string; icon: string }[] = [
   { key: 'players', label: 'ผู้เล่น', icon: '👥' },
@@ -344,6 +343,8 @@ function ModeratorConsole() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vm, page, boot, catalog, impactVerified, recent]);
 
+  const openPages = availablePages(vm, page);
+
   const phase = [
     vm?.nightNumber ? 'คืนที่ ' + vm.nightNumber : '',
     vm?.dayNumber ? 'วันที่ ' + vm.dayNumber : ''
@@ -373,7 +374,6 @@ function ModeratorConsole() {
               <button className={'ic' + (vm.status === 'PAUSED' ? ' on' : '')} title="หยุดพัก"
                       onClick={() => run(vm.status === 'PAUSED' ? 'resumeGame' : 'pauseGame')}>⏸</button>
               <button className="ic" title="ย้อนคำสั่ง" onClick={undo}>↩️</button>
-              <button className="ic" title="บันทึกเหตุการณ์" onClick={openLog}>📋</button>
               <button className="ic" title="เครื่องมือผู้ดำเนินเกม" onClick={() => setTools(true)}>🔧</button>
             </>
           )}
@@ -421,12 +421,16 @@ function ModeratorConsole() {
 
       {vm && (
         <nav id="bottomNav" className="show">
-          {NAV.map((n) => (
-            <button key={n.key} className={'nb' + (page === n.key ? ' active' : '')}
-                    onClick={() => setPage(n.key)}>
-              <span>{n.icon}</span>{n.label}
-            </button>
-          ))}
+          {NAV.map((n) => {
+            const reachable = openPages.has(n.key);
+            return (
+              <button key={n.key} disabled={!reachable}
+                      className={'nb' + (page === n.key ? ' active' : '')}
+                      onClick={() => setPage(n.key)}>
+                <span>{n.icon}</span>{n.label}
+              </button>
+            );
+          })}
         </nav>
       )}
 
@@ -453,6 +457,10 @@ function ModeratorConsole() {
               <span>📄</span><span><b>ส่งออกตารางผู้เล่น (CSV)</b>
                 <small>เปิดใน Google Sheets หรือ Excel ได้ทันที</small></span>
             </a>
+            <button className="toolbtn" onClick={() => { setTools(false); openLog(); }}>
+              <span>📋</span><span><b>บันทึกเหตุการณ์</b>
+                <small>ดูลำดับเหตุการณ์ทั้งหมดของเกมนี้</small></span>
+            </button>
             <button className="toolbtn" onClick={toolEnd}>
               <span>🏁</span><span><b>จบเกมทันที</b>
                 <small>ปิดเกมโดยไม่รอเงื่อนไขชนะ</small></span>
@@ -482,28 +490,4 @@ function ModeratorConsole() {
       )}
     </>
   );
-}
-
-/** Same routing table the Apps Script client used. */
-function routeByStatus(vm: ModeratorViewModel): Page {
-  /* A break must not throw the moderator onto another screen — stay on the
-   * phase the game was paused from and let the banner explain the state. */
-  const status = vm.status === 'PAUSED' && vm.paused
-    ? (vm.paused.from as ModeratorViewModel['status'])
-    : vm.status;
-  switch (status) {
-    case 'SETUP': return vm.players.length ? 'roles' : 'players';
-    case 'ROLE_ASSIGNMENT': return 'assign';
-    case 'FIRST_NIGHT':
-    case 'NIGHT':
-    case 'RESOLVE_NIGHT': return 'night';
-    case 'DEATH_TRIGGER': return vm.nightNumber && !vm.dayNumber ? 'night' : 'day';
-    case 'DAWN':
-    case 'DISCUSSION':
-    case 'NOMINATION':
-    case 'VOTING':
-    case 'RESOLVE_DAY': return 'day';
-    case 'FINISHED': return 'end';
-    default: return 'day';
-  }
 }

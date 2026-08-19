@@ -18,10 +18,12 @@ export function errorResponse(e: unknown): NextResponse {
   if (e instanceof AuthError) return NextResponse.json({ error: message }, { status: 401 });
   /* A stale screen retrying an old command is normal, not a server fault. */
   if (/ข้อมูลไม่ตรงกัน/.test(message)) return NextResponse.json({ error: message }, { status: 409 });
-  if (e instanceof GameError) return NextResponse.json({ error: message }, { status: 400 });
+  /* Checked before the generic GameError branch: "no such game" is a 404 even
+   * though the engine raises it the same way as a rule violation. */
   if (/ไม่พบเกม|ไม่พบผู้เล่น|ไม่พบบทบาท/.test(message)) {
     return NextResponse.json({ error: message }, { status: 404 });
   }
+  if (e instanceof GameError) return NextResponse.json({ error: message }, { status: 400 });
   console.error('command failed:', e);
   return NextResponse.json({ error: message }, { status: 400 });
 }
