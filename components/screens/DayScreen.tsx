@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ModeratorViewModel } from '@/lib/types.ts';
 import { useUi } from '@/components/ui';
+import { chimeFor, playChime } from '@/lib/client/chime.ts';
 
 interface Props {
   vm: ModeratorViewModel;
@@ -264,6 +265,8 @@ function DayBox(props: Props) {
  */
 function Countdown({ endsAt, frozenAt }: { endsAt: number; frozenAt?: number }) {
   const [now, setNow] = useState(() => Date.now());
+  const previousLeft = useRef<number | null>(null);
+
   useEffect(() => {
     if (!endsAt || frozenAt) return;
     const tick = () => setNow(Date.now());
@@ -272,9 +275,19 @@ function Countdown({ endsAt, frozenAt }: { endsAt: number; frozenAt?: number }) 
     return () => clearInterval(id);
   }, [endsAt, frozenAt]);
 
-  if (!endsAt) return null;
   const reference = frozenAt || now;
-  const left = Math.max(0, Math.floor((endsAt - reference) / 1000));
+  const left = endsAt ? Math.max(0, Math.floor((endsAt - reference) / 1000)) : 0;
+
+  useEffect(() => {
+    if (!endsAt || frozenAt) { previousLeft.current = null; return; }
+    const before = previousLeft.current;
+    previousLeft.current = left;
+    if (before === null) return;
+    const alert = chimeFor(before, left);
+    if (alert) playChime(alert);
+  }, [left, endsAt, frozenAt]);
+
+  if (!endsAt) return null;
   const mm = String(Math.floor(left / 60)).padStart(2, '0');
   const ss = String(left % 60).padStart(2, '0');
   return (

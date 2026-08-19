@@ -22,6 +22,8 @@ import type {
  */
 
 const SNAPSHOTS_KEPT = 25;
+/** The label runCommand stores for the startGame command — see takeSnapshot(). */
+const START_GAME_LABEL = 'เริ่มเกม';
 const BCRYPT_ROUNDS = 10;
 
 /* ---------------- helpers ---------------- */
@@ -104,11 +106,17 @@ async function takeSnapshot(
   await client.query(
     'INSERT INTO snapshots (game_id, version, command_id, label, state) VALUES ($1, $2, $3, $4, $5)',
     [state.gameId, state.version, commandId, label, JSON.stringify(stripForStorage(state))]);
-  /* One statement instead of the row-by-row deleteRow() loop Sheets needed. */
+  /* One statement instead of the row-by-row deleteRow() loop Sheets needed.
+   *
+   * The pre-game snapshot is exempt: night actions now take one each, so a long
+   * game would otherwise push "เริ่มเกม" out of the window and take the
+   * restore path of reopenRoleAssignment() down with it. */
   await client.query(
-    'DELETE FROM snapshots WHERE game_id = $1 AND id NOT IN ' +
-    '(SELECT id FROM snapshots WHERE game_id = $1 ORDER BY id DESC LIMIT $2)',
-    [state.gameId, SNAPSHOTS_KEPT]);
+    'DELETE FROM snapshots WHERE game_id = $1 ' +
+    'AND id NOT IN (SELECT id FROM snapshots WHERE game_id = $1 ORDER BY id DESC LIMIT $2) ' +
+    'AND id <> COALESCE((SELECT id FROM snapshots WHERE game_id = $1 AND label = $3 ' +
+    '                    ORDER BY id DESC LIMIT 1), -1)',
+    [state.gameId, SNAPSHOTS_KEPT, START_GAME_LABEL]);
 }
 
 export async function countSnapshots(gameId: string): Promise<number> {
@@ -335,7 +343,10 @@ export async function undoLastCommand(gameId: string): Promise<ModeratorViewMode
        state.status === 'FINISHED', gameId]);
     await client.query('DELETE FROM snapshots WHERE id = $1', [snap.rows[0].id]);
     await writeEvents(client, state);
-    return moderatorViewOf(state);
+    const vm = moderatorViewOf(state);
+    /* So the toast can name what was rolled back rather than just "done". */
+    vm.lastUndoneLabel = label || '';
+    return vm;
   });
 
   return view;
@@ -381,8 +392,8 @@ export async function reopenRoleAssignment(
 
     if (started) {
       const snap = await client.query<{ state: GameState }>(
-        "SELECT state FROM snapshots WHERE game_id = $1 AND label = 'เริ่มเกม' " +
-        'ORDER BY id DESC LIMIT 1', [cmd.gameId]);
+        'SELECT state FROM snapshots WHERE game_id = $1 AND label = $2 ' +
+        'ORDER BY id DESC LIMIT 1', [cmd.gameId, START_GAME_LABEL]);
       if (!snap.rowCount) {
         throw new GameError(
           'ย้อนกลับไปแก้การแจกบทบาทไม่ได้ เพราะจุดบันทึกก่อนเริ่มเกมถูกตัดทิ้งไปแล้ว — ' +

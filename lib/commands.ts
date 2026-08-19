@@ -42,8 +42,11 @@ const HANDLERS: Record<string, Handler> = {
     label: 'เริ่มเกม', high: true,
     fn: (s) => { E.startGame(s); }
   },
+  /* Tapping the wrong name is the likeliest mistake at a real table, so these
+   * two get a snapshot even though they are small steps — without one the undo
+   * button can only reach back past the whole night. */
   submitRoleAction: {
-    label: 'บันทึกการกระทำกลางคืน', high: false,
+    label: 'บันทึกการกระทำกลางคืน', high: true,
     fn: (s, c) => {
       const info = E.submitRoleAction(s, String(c.stepId),
         (c.targetIds as string[]) || [], (c.meta as Record<string, unknown>) || {});
@@ -51,7 +54,7 @@ const HANDLERS: Record<string, Handler> = {
     }
   },
   skipStep: {
-    label: 'ข้ามขั้นตอน', high: false,
+    label: 'ข้ามขั้นตอน', high: true,
     fn: (s, c) => { E.skipStep(s, String(c.stepId)); }
   },
   resolveNight: {

@@ -176,6 +176,8 @@ export interface ModeratorViewModel {
   voteProgress?: import('./voting.ts').VoteProgress | null;
   /** Set while the game is on a break, so the screen can stay where it was. */
   paused?: import('./pause.ts').PauseInfo | null;
+  /** Only on the response to an undo: the label of the command just reverted. */
+  lastUndoneLabel?: string;
   /** Only present on the screen that creates a game — never persisted to a client. */
   moderatorPin?: string;
 }

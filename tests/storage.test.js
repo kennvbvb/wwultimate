@@ -219,3 +219,54 @@ test('ยังไม่เริ่มเกม การกลับไปแ�
   eq(reopened.rolesLocked, false, 'ปลดล็อกแล้ว');
   eq(reopened.selectedRoles.length, 2, 'ชุดบทบาทที่เลือกไว้ต้องยังอยู่');
 });
+
+test('ย้อนกลับได้ทีละขั้นแม้เป็นการกระทำกลางคืน และ snapshot ก่อนเริ่มเกมต้องไม่ถูกตัดทิ้ง', async () => {
+  const g = await newStoredGame(6);
+  let view = await S.moderatorView(g.gameId);
+
+  await S.runCommand({ gameId: g.gameId, expectedVersion: view.version, action: 'configureGame' },
+    'ตั้งค่ากติกา', false, (st) => E.configureGame(st, {
+      selectedRoles: [{ roleId: 'werewolf', count: 1 }, { roleId: 'seer', count: 1 },
+                      { roleId: 'villager', count: 4 }]
+    }));
+
+  view = await S.moderatorView(g.gameId);
+  await S.runCommand({ gameId: g.gameId, expectedVersion: view.version, action: 'assignRoles' },
+    'บันทึกการแจกบทบาท', false, (st) => E.assignRoles(st, st.players.map((p, i) => ({
+      playerId: p.playerId, roleId: i === 0 ? 'werewolf' : i === 1 ? 'seer' : 'villager'
+    }))));
+
+  view = await S.moderatorView(g.gameId);
+  view = await S.runCommand({ gameId: g.gameId, expectedVersion: view.version, action: 'startGame' },
+    'เริ่มเกม', true, (st) => E.startGame(st));
+
+  /* the moderator taps a target, then realises it was the wrong name */
+  const step = view.currentStep;
+  const target = view.players.find((p) => !step.actorIds.includes(p.playerId) && p.alive);
+  const afterAction = await S.runCommand(
+    { gameId: g.gameId, expectedVersion: view.version, action: 'submitRoleAction' },
+    'บันทึกการกระทำกลางคืน: ' + step.stepId, true,
+    (st) => { E.submitRoleAction(st, step.stepId, [target.playerId], {}); });
+  eq(afterAction.night.results.length, 1, 'บันทึกการกระทำไปแล้วหนึ่งขั้น');
+
+  const undone = await S.undoLastCommand(g.gameId);
+  eq(undone.night.results.length, 0, 'ย้อนกลับแล้วการกระทำนั้นต้องหายไป');
+  eq(undone.currentStep.stepId, step.stepId, 'และกลับมาอยู่ขั้นตอนเดิม');
+  assert(undone.lastUndoneLabel.indexOf('บันทึกการกระทำกลางคืน') === 0,
+    'ต้องบอกได้ว่าย้อนคำสั่งอะไร');
+
+  /* fill the snapshot window with night actions — the pre-game one must survive */
+  let current = await S.moderatorView(g.gameId);
+  for (let i = 0; i < 30; i++) {
+    current = await S.runCommand({ gameId: g.gameId, expectedVersion: current.version, action: 'noop' },
+      'คำสั่งทดสอบ ' + i, true, (st) => { st.title = 'รอบ ' + i; });
+  }
+  const kept = await query(
+    "SELECT COUNT(*)::int AS n FROM snapshots WHERE game_id = $1 AND label = 'เริ่มเกม'",
+    [g.gameId]);
+  eq(kept.rows[0].n, 1, 'snapshot ก่อนเริ่มเกมต้องยังอยู่');
+
+  const reopened = await S.reopenRoleAssignment(
+    { gameId: g.gameId, expectedVersion: current.version, action: 'reopenRoleAssignment' }, 'ทดสอบ');
+  eq(reopened.status, 'ROLE_ASSIGNMENT', 'จึงยังกลับไปแก้การแจกบทบาทได้');
+});

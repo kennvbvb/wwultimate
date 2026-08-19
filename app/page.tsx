@@ -16,6 +16,8 @@ import AssignScreen from '@/components/screens/AssignScreen';
 import NightScreen from '@/components/screens/NightScreen';
 import DayScreen from '@/components/screens/DayScreen';
 import EndScreen from '@/components/screens/EndScreen';
+import PublicScreenCard from '@/components/PublicScreenCard';
+import { playChime, setSoundEnabled, soundEnabled } from '@/lib/client/chime.ts';
 
 const LAST_GAME_KEY = 'uw_last_game_v2';
 const RECENT_KEY = 'uw_recent_games_v1';
@@ -69,6 +71,8 @@ function ModeratorConsole() {
   const [covered, setCovered] = useState(false);
   const [tools, setTools] = useState(false);
   const [log, setLog] = useState<{ type: string; at: string }[] | null>(null);
+  const [showPublic, setShowPublic] = useState(false);
+  const [sound, setSound] = useState(true);
   const [pinOnce, setPinOnce] = useState('');
   const [recent, setRecent] = useState<RecentGame[]>([]);
   /* Two commands can be sent back to back (save votes, then close the vote).
@@ -82,6 +86,7 @@ function ModeratorConsole() {
   useEffect(() => {
     api.getBootstrap().then(setBoot).catch((e) => ui.toast(e.message, 'bad'));
     setRecent(readRecent());
+    setSound(soundEnabled());
     let last = '';
     try { last = localStorage.getItem(LAST_GAME_KEY) || ''; } catch { /* private mode */ }
     if (last) {
@@ -184,12 +189,13 @@ function ModeratorConsole() {
 
   const undo = async () => {
     const res = await ui.confirm({
-      title: 'ย้อนคำสั่งล่าสุด', icon: '↩️',
-      text: 'ระบบจะย้อนกลับไปยังสถานะก่อนคำสั่งสำคัญล่าสุด (เก็บไว้ 25 ขั้น)',
+      title: 'ย้อนกลับหนึ่งขั้น', icon: '↩️',
+      text: 'ย้อนคำสั่งล่าสุดกลับไปหนึ่งขั้น เช่น แตะเป้าหมายผิดคนกลางคืน (ย้อนได้ 25 ขั้น)',
       confirmText: 'ย้อนกลับ'
     });
     if (!res.confirmed) return;
-    if (await run('undo')) ui.toast('ย้อนคำสั่งแล้ว', 'good');
+    const next = await run('undo');
+    if (next) ui.toast('ย้อนแล้ว: ' + (next.lastUndoneLabel || 'คำสั่งล่าสุด'), 'good');
   };
 
   const openLog = async () => {
@@ -355,6 +361,13 @@ function ModeratorConsole() {
         </div>
         <div className="tb-right">
           <button className="ic" title="ซ่อนจอ" onClick={() => setCovered(true)}>👁️</button>
+          <button className={'ic' + (sound ? ' on' : '')} title={sound ? 'เสียงเตือนเปิดอยู่' : 'เสียงเตือนปิดอยู่'}
+                  onClick={() => {
+                    const next = !sound;
+                    setSound(next);
+                    setSoundEnabled(next);
+                    if (next) playChime('warn');   /* also unlocks audio on mobile */
+                  }}>{sound ? '🔔' : '🔕'}</button>
           {vm && (
             <>
               <button className={'ic' + (vm.status === 'PAUSED' ? ' on' : '')} title="หยุดพัก"
@@ -388,10 +401,18 @@ function ModeratorConsole() {
           <div className="card2">
             <h5>🔐 PIN ผู้ดำเนินเกม</h5>
             <p className="hint">จดไว้ให้ดี ระบบจะไม่แสดงอีก ใช้คู่กับรหัสเกม {vm.gameId} เมื่อเปิดจากเครื่องอื่น</p>
-            <div className="pin-box">{pinOnce}</div>
-            <div className="hint mt-2">
-              จอสาธารณะ: <code>/public/{vm.gameId}</code> — เปิดได้โดยไม่ต้องใช้ PIN
+            <div className="pin-row">
+              <div className="pin-box">{pinOnce}</div>
+              <button className="btn-ghost" onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(vm.gameId + ' / ' + pinOnce);
+                  ui.toast('คัดลอกรหัสเกมและ PIN แล้ว', 'good');
+                } catch {
+                  ui.toast('คัดลอกไม่สำเร็จ กรุณาจดด้วยมือ', 'bad');
+                }
+              }}>คัดลอก</button>
             </div>
+            <div className="mt-3"><PublicScreenCard gameId={vm.gameId} compact /></div>
             <button className="btn-ghost w-100 mt-2" onClick={() => setPinOnce('')}>จดแล้ว ปิดข้อความนี้</button>
           </div>
         )}
@@ -424,6 +445,10 @@ function ModeratorConsole() {
               <span>☠️</span><span><b>สั่งให้ผู้เล่นเสียชีวิต</b>
                 <small>ใช้เมื่อมีเหตุนอกกติกา เช่น ผู้เล่นออกกลางคัน</small></span>
             </button>
+            <button className="toolbtn" onClick={() => { setTools(false); setShowPublic(true); }}>
+              <span>📺</span><span><b>เปิดจอสาธารณะบนทีวี</b>
+                <small>แสดง QR ให้สแกน ไม่ต้องพิมพ์รหัสเกม</small></span>
+            </button>
             <a className="toolbtn" href={'/api/game/' + encodeURIComponent(vm.gameId) + '/players.csv'}>
               <span>📄</span><span><b>ส่งออกตารางผู้เล่น (CSV)</b>
                 <small>เปิดใน Google Sheets หรือ Excel ได้ทันที</small></span>
@@ -436,6 +461,12 @@ function ModeratorConsole() {
           <div className="hint mt-2">
             สถานะปัจจุบัน: {vm.statusTh} • ทุกคำสั่งสำคัญย้อนกลับได้ด้วยปุ่ม ↩️
           </div>
+        </Modal>
+      )}
+
+      {showPublic && vm && (
+        <Modal title="จอสาธารณะ" onClose={() => setShowPublic(false)}>
+          <PublicScreenCard gameId={vm.gameId} compact />
         </Modal>
       )}
 

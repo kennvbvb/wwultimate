@@ -64,6 +64,9 @@ try {
   ok(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(pin), 'ได้ PIN ผู้ดำเนินเกม ' + pin);
   const gameId = (await page.locator('.tb-sub').textContent()).split(' •')[0].trim();
   ok(/^GAME-/.test(gameId), 'ได้รหัสเกม ' + gameId);
+  ok(await page.locator('img.qr').isVisible(), 'มี QR ให้สแกนเปิดจอสาธารณะตั้งแต่หน้าสร้างเกม');
+  ok((await page.locator('.qr-url').textContent()).includes('/public/' + gameId),
+     'ลิงก์จอสาธารณะตรงกับเกมนี้');
   await shot('created');
   await page.click('button:has-text("จดแล้ว ปิดข้อความนี้")');
 
@@ -147,6 +150,27 @@ try {
   }
   ok(guard < 30, 'เดินครบทุกขั้นตอนกลางคืน (' + guard + ' ขั้น)');
   ok(answers > 0, 'มีขั้นตอนที่เด้งคำตอบให้ผู้ดำเนินเกม ' + answers + ' ครั้ง');
+
+  /* ---- undo must reach back one night action, not the whole night ---- */
+  const stepsBefore = await page.locator('.steprow .dot.done, .steprow .dot.skip').count();
+  await page.click('.ic[title="ย้อนคำสั่ง"]');
+  await page.click('.dlg button:has-text("ย้อนกลับ")');
+  await page.waitForTimeout(900);
+  const stepsAfter = await page.locator('.steprow .dot.done, .steprow .dot.skip').count();
+  ok(stepsAfter === stepsBefore - 1,
+     'ย้อนกลับหนึ่งขั้นแล้วขั้นตอนที่ทำไปลดลงหนึ่ง (' + stepsBefore + ' → ' + stepsAfter + ')');
+
+  /* redo that step so the game can continue */
+  {
+    const enabled = await page.locator('.tgt:not(.dis)').all();
+    if (enabled.length) await enabled[Math.floor(Math.random() * enabled.length)].click();
+    await page.click('.step-card button:has-text("บันทึก")');
+    await page.waitForTimeout(400);
+    if (await page.locator('.dlg button:has-text("รับทราบ")').count()) {
+      await page.click('.dlg button:has-text("รับทราบ")');
+      await page.waitForTimeout(200);
+    }
+  }
   await page.click('button:has-text("สรุปผลกลางคืน")');
   await page.waitForSelector('.dlg-lines');
   const dawnText = await page.locator('.dlg').textContent();
@@ -295,6 +319,12 @@ try {
   await shot('end');
 
   /* ---- privacy cover ---- */
+  ok(await page.locator('.ic[title="เสียงเตือนเปิดอยู่"]').isVisible(),
+     'เสียงเตือนนาฬิกาเปิดไว้เป็นค่าเริ่มต้น');
+  await page.click('.ic[title="เสียงเตือนเปิดอยู่"]');
+  ok(await page.locator('.ic[title="เสียงเตือนปิดอยู่"]').isVisible(), 'ปิดเสียงเตือนได้');
+  await page.click('.ic[title="เสียงเตือนปิดอยู่"]');
+
   await page.click('.ic[title="ซ่อนจอ"]');
   ok(await page.locator('#cover.show').isVisible(), 'ปุ่มปิดจอทันทีทำงาน');
   await page.click('#cover');
@@ -316,6 +346,12 @@ try {
   ok(await admin.locator('h6:has-text("ฝ่ายที่ชนะ")').isVisible(), 'หน้าสถิติสรุปฝ่ายที่ชนะได้');
   ok((await admin.locator('.sumtable tbody tr').count()) > 0, 'หน้าสถิติมีตารางบทบาทและผู้เล่น');
   if (SHOTS) await admin.screenshot({ path: SHOT_DIR + '/92-stats.png', fullPage: true });
+
+  await page.click('.ic[title="เครื่องมือผู้ดำเนินเกม"]');
+  await page.click('button:has-text("เปิดจอสาธารณะบนทีวี")');
+  await page.waitForSelector('.dlg img.qr');
+  ok(await page.locator('.dlg img.qr').isVisible(), 'เปิด QR จอสาธารณะจากเมนูเครื่องมือได้ทุกเมื่อ');
+  await page.click('.dlg button:has-text("ปิด")');
 
   console.log('\nผ่านการตรวจ ' + checks + ' ข้อ' + (SHOTS ? ' (ภาพอยู่ที่ ' + SHOT_DIR + ')' : ''));
 } finally {
