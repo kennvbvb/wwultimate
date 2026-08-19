@@ -48,6 +48,15 @@ if (process.env.DEBUG === '1') {
   });
 }
 
+/* The loading veil covers the whole screen while a command is in flight, and a
+ * React re-render right after it lifts can detach the node Playwright already
+ * resolved. Waiting for the app to go idle first keeps the walkthrough honest
+ * instead of racing it. */
+async function idle(target = page) {
+  await target.waitForSelector('#ld.show', { state: 'hidden', timeout: 15000 }).catch(() => {});
+  await target.waitForTimeout(120);
+}
+
 const NAMES = ['สมชาย', 'สมหญิง', 'วิชัย', 'มานี', 'ปิติ', 'ชูใจ', 'วีระ', 'ดวงใจ'];
 
 try {
@@ -253,7 +262,20 @@ try {
   /* ---- run the game to its end ---- */
   let checkedGuardHint = false;
   guard = 0;
+  /* Swallowed clicks must not turn into a silent spin: if nothing moves for a
+   * while, stop and let the "game finished" assertion report the truth. */
+  let stalled = 0;
+  let lastSeen = '';
   while (guard++ < 200) {
+    await idle();
+    const marker = (await page.locator('.tb-sub').textContent()) + '|' +
+      (await page.locator('.steprow .dot.done, .steprow .dot.skip').count());
+    stalled = marker === lastSeen ? stalled + 1 : 0;
+    lastSeen = marker;
+    if (stalled > 12) {
+      console.log('  … เกมไม่ขยับมา ' + stalled + ' รอบ ที่สถานะ "' + marker + '"');
+      break;
+    }
     /* announcements block the screen until acknowledged, by design */
     if (await page.locator('.dlg button:has-text("รับทราบ")').count()) {
       await page.click('.dlg button:has-text("รับทราบ")');
@@ -267,7 +289,9 @@ try {
     } else if (await page.locator('button:has-text("เข้าสู่คืนถัดไป")').count()) {
       await page.click('button:has-text("เข้าสู่คืนถัดไป")');
     } else if (await page.locator('button:has-text("สรุปผลกลางคืน")').count()) {
-      await page.click('button:has-text("สรุปผลกลางคืน")');
+      /* a re-render can swap this button out from under the click; the loop
+       * simply comes back round rather than failing the whole walkthrough */
+      await page.click('button:has-text("สรุปผลกลางคืน")', { timeout: 8000 }).catch(() => {});
     } else if (await page.locator('.step-card .step-role').count()) {
       const stepTitle = (await page.locator('.step-role').textContent()).trim();
       if (process.env.DEBUG === '1') console.log('  step: ' + stepTitle);
