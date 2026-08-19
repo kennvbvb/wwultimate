@@ -1,6 +1,7 @@
 import { createGame } from '@/lib/storage.ts';
 import { grantModerator } from '@/lib/auth.ts';
 import { errorResponse, json, readJson } from '@/lib/api.ts';
+import { clientKey, enforceRateLimit } from '@/lib/rateLimit.ts';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,6 +12,7 @@ export const dynamic = 'force-dynamic';
  */
 export async function POST(req: Request) {
   try {
+    await enforceRateLimit('createGame', clientKey(req));
     const body = await readJson(req);
     const created = await createGame({
       playerNames: (body.playerNames as string[]) || [],

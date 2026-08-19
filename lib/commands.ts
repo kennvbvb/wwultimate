@@ -1,4 +1,6 @@
 import * as E from './engine.generated.js';
+import { pauseWithClock, resumeWithClock } from './pause.ts';
+import { assertTieChoice, assertVoteReady } from './voting.ts';
 import type { Command, GameState } from './types.ts';
 
 /**
@@ -35,10 +37,6 @@ const HANDLERS: Record<string, Handler> = {
   swapRoles: {
     label: 'สลับบทบาทระหว่างผู้เล่นสองคน', high: false,
     fn: (s, c) => swapRoles(s, String(c.playerA), String(c.playerB))
-  },
-  reopenRoleAssignment: {
-    label: 'REOPEN_ROLE_ASSIGNMENT', high: true,
-    fn: (s, c) => { E.reopenRoleAssignment(s, c.reason as string | undefined); }
   },
   startGame: {
     label: 'เริ่มเกม', high: true,
@@ -85,7 +83,13 @@ const HANDLERS: Record<string, Handler> = {
   },
   resolveVote: {
     label: 'สรุปผลการลงคะแนน', high: true,
-    fn: (s, c) => { E.resolveVote(s, c.moderatorChoice as string | undefined); }
+    fn: (s, c) => {
+      /* Both guards run inside the command's transaction, so a rejected close
+       * leaves the recorded votes exactly as they were. */
+      assertVoteReady(s);
+      assertTieChoice(s, c.moderatorChoice as string | undefined);
+      E.resolveVote(s, c.moderatorChoice as string | undefined);
+    }
   },
   forceEndDay: {
     label: 'ปิดวันโดยไม่แขวนคอ', high: true,
@@ -97,11 +101,11 @@ const HANDLERS: Record<string, Handler> = {
   },
   pauseGame: {
     label: 'หยุดพักเกม', high: false,
-    fn: (s) => { E.pauseGame(s); }
+    fn: (s) => { pauseWithClock(s); }
   },
   resumeGame: {
     label: 'เล่นต่อ', high: false,
-    fn: (s) => { E.resumeGame(s); }
+    fn: (s) => { resumeWithClock(s); }
   },
   endGame: {
     label: 'จบเกม', high: true,
@@ -131,7 +135,7 @@ function swapRoles(state: GameState, playerA: string, playerB: string): void {
 
 /** Command names the client may send. Used by the API route and its tests. */
 export function listCommands(): string[] {
-  return Object.keys(HANDLERS).concat(['undo', 'rematch']);
+  return Object.keys(HANDLERS).concat(['undo', 'rematch', 'reopenRoleAssignment']);
 }
 
 export { HANDLERS };

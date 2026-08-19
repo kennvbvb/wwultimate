@@ -3,7 +3,10 @@ import type { PoolClient } from 'pg';
 import * as E from './engine.generated.js';
 import { query, withTransaction } from './db.ts';
 import { ensureCatalogLoaded } from './catalog.ts';
+import { secureGameId, securePin } from './ids.ts';
 import { nightTargetHints } from './nightHints.ts';
+import { pauseInfo } from './pause.ts';
+import { voteProgress } from './voting.ts';
 import { buildStats, type FinishedGameRow, type Stats } from './stats.ts';
 import type {
   Command, GameState, GameEvent, ModeratorViewModel, PublicViewModel, FinalSummary
@@ -49,6 +52,8 @@ function idemKey(gameId: string, key: string): string { return gameId + ':' + ke
 function moderatorViewOf(state: GameState): ModeratorViewModel {
   const view = E.moderatorViewModel(state);
   view.targetHints = nightTargetHints(state, view.currentStep);
+  view.voteProgress = voteProgress(state);
+  view.paused = pauseInfo(state);
   return view;
 }
 
@@ -123,21 +128,52 @@ export async function createGame(payload: {
   if (names.length > 40) throw new GameError('รองรับผู้เล่นไม่เกิน 40 คน');
   await ensureCatalogLoaded();
 
-  const state = E.createGameState(payload);
-  const pin = state.moderatorPin;
-  const pinHash = await bcrypt.hash(normalisePin(pin), BCRYPT_ROUNDS);
+  /* Retry only exists for the astronomically unlikely id collision; anything
+   * else is a real failure and propagates on the first attempt. */
+  for (let attempt = 0; ; attempt++) {
+    const state = E.createGameState(payload);
+    const pin = replaceGeneratedIdentifiers(state);
+    const pinHash = await bcrypt.hash(normalisePin(pin), BCRYPT_ROUNDS);
 
-  await withTransaction(async (client) => {
-    await client.query(
-      'INSERT INTO games (game_id, version, status, title, pin_hash, state, finished) ' +
-      'VALUES ($1, $2, $3, $4, $5, $6, FALSE)',
-      [state.gameId, state.version, state.status, state.title, pinHash,
-       JSON.stringify(stripForStorage(state))]);
-    await writeEvents(client, state);
-  });
+    try {
+      await withTransaction(async (client) => {
+        await client.query(
+          'INSERT INTO games (game_id, version, status, title, pin_hash, state, finished) ' +
+          'VALUES ($1, $2, $3, $4, $5, $6, FALSE)',
+          [state.gameId, state.version, state.status, state.title, pinHash,
+           JSON.stringify(stripForStorage(state))]);
+        await writeEvents(client, state);
+      });
+    } catch (e) {
+      if (attempt < 4 && (e as { code?: string }).code === '23505') continue;
+      throw e;
+    }
 
-  const view = moderatorViewOf(state);
-  return { view, moderatorPin: pin };
+    return { view: moderatorViewOf(state), moderatorPin: pin };
+  }
+}
+
+/**
+ * Swaps the engine's Math.random() id and PIN for cryptographic ones, fixing up
+ * the event and timeline entries it already wrote with the old id.
+ * @returns the plaintext PIN, shown once and then only ever stored hashed.
+ */
+function replaceGeneratedIdentifiers(state: GameState): string {
+  const previousId = state.gameId;
+  state.gameId = secureGameId();
+  const pin = securePin();
+  state.moderatorPin = pin;
+
+  for (const event of state.__events || []) {
+    const payload = event.payload as { gameId?: string } | undefined;
+    if (payload && payload.gameId === previousId) payload.gameId = state.gameId;
+  }
+  for (const entry of state.timeline) {
+    if (entry.text.indexOf(previousId) >= 0) {
+      entry.text = entry.text.split(previousId).join(state.gameId);
+    }
+  }
+  return pin;
 }
 
 export async function gameExists(gameId: string): Promise<boolean> {
@@ -300,6 +336,86 @@ export async function undoLastCommand(gameId: string): Promise<ModeratorViewMode
     await client.query('DELETE FROM snapshots WHERE id = $1', [snap.rows[0].id]);
     await writeEvents(client, state);
     return moderatorViewOf(state);
+  });
+
+  return view;
+}
+
+/**
+ * Re-open the deal.
+ *
+ * Before the first night this is just an unlock. Afterwards the moderator is
+ * asking for something much bigger — the old screen promised "every event in
+ * this game will be cleared" while the engine only flipped a flag, leaving
+ * deaths, statuses and soulmate links attached to cards that are about to
+ * change hands. So once a game has started this restores the snapshot taken
+ * immediately before it began, which is what that sentence actually means.
+ */
+export async function reopenRoleAssignment(
+  cmd: Command, reason?: string
+): Promise<ModeratorViewModel> {
+  await ensureCatalogLoaded();
+  const label = 'REOPEN_ROLE_ASSIGNMENT';
+
+  const view = await withTransaction(async (client) => {
+    if (cmd.idempotencyKey) {
+      const hit = await client.query<{ result: ModeratorViewModel }>(
+        'SELECT result FROM idempotency WHERE key = $1',
+        [idemKey(cmd.gameId, String(cmd.idempotencyKey))]);
+      if (hit.rowCount) return hit.rows[0].result;
+    }
+
+    const got = await client.query<{ state: GameState }>(
+      'SELECT state FROM games WHERE game_id = $1 FOR UPDATE', [cmd.gameId]);
+    if (!got.rowCount) throw new GameError('ไม่พบเกมรหัส ' + cmd.gameId);
+
+    const current = reviveState(got.rows[0].state);
+    const baseVersion = current.version;
+    E.assertVersion(current, cmd.expectedVersion as number | undefined);
+
+    /* The reopen itself stays undoable. */
+    await takeSnapshot(client, current, String(cmd.idempotencyKey || E.uwRandomId(6)), label);
+
+    let state = current;
+    const started = Number(current.nightNumber || 0) > 0 || Number(current.dayNumber || 0) > 0;
+
+    if (started) {
+      const snap = await client.query<{ state: GameState }>(
+        "SELECT state FROM snapshots WHERE game_id = $1 AND label = 'เริ่มเกม' " +
+        'ORDER BY id DESC LIMIT 1', [cmd.gameId]);
+      if (!snap.rowCount) {
+        throw new GameError(
+          'ย้อนกลับไปแก้การแจกบทบาทไม่ได้ เพราะจุดบันทึกก่อนเริ่มเกมถูกตัดทิ้งไปแล้ว — ' +
+          'ถ้าต้องการแก้การ์ดของผู้เล่นบางคนให้ใช้ "สลับบทบาท" หรือเริ่มเกมใหม่ด้วยที่นั่งเดิม');
+      }
+      state = reviveState(snap.rows[0].state);
+    }
+
+    E.reopenRoleAssignment(state, reason);
+    if (started) {
+      E.timeline(state, 'alert', 'กู้สถานะกลับไปก่อนเริ่มเกม เหตุการณ์ระหว่างเกมถูกล้างทั้งหมด');
+    }
+
+    state.version = baseVersion + 1;
+    state.updatedAt = E.uwNow();
+
+    const upd = await client.query(
+      'UPDATE games SET state = $1, version = $2, status = $3, finished = FALSE, ' +
+      'updated_at = now() WHERE game_id = $4 AND version = $5',
+      [JSON.stringify(stripForStorage(state)), state.version, state.status, cmd.gameId, baseVersion]);
+    if (upd.rowCount === 0) {
+      throw new GameError('ข้อมูลไม่ตรงกัน มีคำสั่งอื่นแก้ไขเกมนี้ไปแล้ว กรุณารีเฟรชหน้าจอ');
+    }
+
+    await writeEvents(client, state);
+
+    const vm = moderatorViewOf(state);
+    if (cmd.idempotencyKey) {
+      await client.query(
+        'INSERT INTO idempotency (key, game_id, result) VALUES ($1, $2, $3) ON CONFLICT (key) DO NOTHING',
+        [idemKey(cmd.gameId, String(cmd.idempotencyKey)), cmd.gameId, JSON.stringify(vm)]);
+    }
+    return vm;
   });
 
   return view;

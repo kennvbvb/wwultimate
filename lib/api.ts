@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { AuthError } from './auth.ts';
+import { RateLimitError } from './rateLimit.ts';
 import { GameError } from './storage.ts';
 
 /**
@@ -9,6 +10,11 @@ import { GameError } from './storage.ts';
  */
 export function errorResponse(e: unknown): NextResponse {
   const message = e instanceof Error ? e.message : 'เกิดข้อผิดพลาดที่ไม่รู้จัก';
+  if (e instanceof RateLimitError) {
+    return NextResponse.json({ error: message }, {
+      status: 429, headers: { 'retry-after': String(e.retryAfterSeconds) }
+    });
+  }
   if (e instanceof AuthError) return NextResponse.json({ error: message }, { status: 401 });
   /* A stale screen retrying an old command is normal, not a server fault. */
   if (/ข้อมูลไม่ตรงกัน/.test(message)) return NextResponse.json({ error: message }, { status: 409 });

@@ -216,6 +216,7 @@ button:disabled{opacity:.45}
 /* ---------- day ---------- */
 .timer{font-family:var(--font-prompt),'Prompt',sans-serif;font-size:2.6rem;font-weight:700;text-align:center;color:var(--gold);letter-spacing:2px}
 .timer.low{color:var(--bad)}
+.timer.paused{opacity:.55}
 .deadrow{display:flex;gap:10px;align-items:center;padding:9px;border-radius:11px;background:#2a1020;
   border:1px solid #5c1f33;margin-bottom:7px}
 .vrow{display:flex;gap:8px;align-items:center;padding:8px;border:1px solid var(--bdr);
@@ -299,6 +300,24 @@ button:disabled{opacity:.45}
 }
 .toast.bad{border-color:#5c1f33;background:#2a1020;color:#fda4af}
 .toast.good{border-color:#1f7a4d;background:#0f2b1c;color:#86efac}
+
+/* paused phase stays visible but untouchable */
+.paused-dim{opacity:.55;pointer-events:none;filter:saturate(.6)}
+
+/* paused banner */
+.paused-banner{
+  display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;
+  background:linear-gradient(160deg,#3a2c10,#241c0c);border:1px solid var(--warn);
+  border-radius:var(--r);padding:12px 14px;margin-bottom:14px;
+}
+
+/* vote completeness */
+.vote-progress{
+  background:#0d1430;border:1px solid var(--bdr);border-radius:11px;padding:9px 12px;
+  font-size:.9rem;margin-bottom:8px;
+}
+.vote-progress.done{border-color:#1f7a4d;background:#0f2b1c;color:#86efac}
+.vpick.unset{border-color:var(--warn)}
 
 /* ---------- misc ---------- */
 .spinner{

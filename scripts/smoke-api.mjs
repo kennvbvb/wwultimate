@@ -12,6 +12,11 @@ let cookie = '';
 const used = new Set();
 let checks = 0;
 
+/* Each run looks like a different client so repeated local runs do not eat the
+ * rate-limit budget. In production the platform overwrites this header with the
+ * real client IP, so it cannot be used to dodge the limiter there. */
+const RUN_IP = '198.51.100.' + (1 + Math.floor(Math.random() * 250));
+
 function ok(cond, what) {
   checks++;
   if (!cond) { console.error('✗ ' + what); process.exit(1); }
@@ -21,7 +26,12 @@ function ok(cond, what) {
 async function call(path, init = {}) {
   const res = await fetch(BASE + path, {
     ...init,
-    headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}), ...(init.headers || {}) }
+    headers: {
+      'content-type': 'application/json',
+      'x-forwarded-for': RUN_IP,
+      ...(cookie ? { cookie } : {}),
+      ...(init.headers || {})
+    }
   });
   const setCookie = res.headers.getSetCookie?.() || [];
   for (const c of setCookie) cookie = c.split(';')[0];
@@ -60,6 +70,7 @@ const names = (n) => Array.from({ length: n }, (_, i) => 'นักเรีย�
 const boot = await call('/api/bootstrap');
 ok(boot.status === 200 && boot.body.catalog.roles.length === 46, 'bootstrap คืนบทบาทครบ 46');
 ok(boot.body.catalog.impactVerified === false, 'ธง Village Impact ยังไม่ยืนยันถูกส่งมาด้วย');
+ok(boot.body.openGames === undefined, 'bootstrap ต้องไม่แจกรายการเกมที่ยังเล่นค้างอยู่ให้ทุกคน');
 
 /* ---- create ---- */
 const created = await call('/api/games', { method: 'POST', body: JSON.stringify({ playerNames: names(8), title: 'ห้อง ป.5/2' }) });
@@ -139,8 +150,24 @@ view = (await call('/api/game/' + gameId)).body;
 const nominee = view.players.find((p) => p.alive);
 await cmd('startNomination', { nomineeIds: [nominee.playerId] });
 view = (await call('/api/game/' + gameId)).body;
+const voters = view.voteProgress ? view.voteProgress.eligible : view.day.eligibleVoters;
 const votes = {};
-for (const voter of view.day.eligibleVoters) votes[voter.playerId] = nominee.playerId;
+for (const voter of voters) votes[voter.playerId] = nominee.playerId;
+
+/* ลงไม่ครบต้องถูกปฏิเสธ */
+const partial = { [voters[0].playerId]: nominee.playerId };
+if (voters.length > 1) {
+  await cmd('submitVote', { votes: partial });
+  const early = await cmd('resolveVote', {}, false);
+  ok(early.status === 400 && /ยังลงคะแนนไม่ครบ/.test(early.body.error || ''),
+     'สรุปผลทั้งที่ลงคะแนนไม่ครบ ต้องถูกปฏิเสธ');
+  const still = (await call('/api/game/' + gameId)).body;
+  ok(still.status === 'VOTING', 'คำสั่งที่ถูกปฏิเสธต้องไม่เปลี่ยนสถานะเกม');
+  ok(still.voteProgress && still.voteProgress.received === 1,
+     'คะแนนที่บันทึกไปแล้วต้องยังอยู่ครบ');
+  version = still.version;
+}
+
 await cmd('submitVote', { votes });
 await cmd('resolveVote');
 view = (await call('/api/game/' + gameId)).body;

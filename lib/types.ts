@@ -172,6 +172,10 @@ export interface ModeratorViewModel {
   flags: Record<string, unknown>;
   /** playerId → why this target is off limits for the current step. */
   targetHints?: Record<string, string>;
+  /** Who still owes a vote, and whether the day can be closed. Null outside VOTING. */
+  voteProgress?: import('./voting.ts').VoteProgress | null;
+  /** Set while the game is on a break, so the screen can stay where it was. */
+  paused?: import('./pause.ts').PauseInfo | null;
   /** Only present on the screen that creates a game — never persisted to a client. */
   moderatorPin?: string;
 }

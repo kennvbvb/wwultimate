@@ -25,7 +25,15 @@ function ok(cond, what) {
  * pinned revision; PW_CHROMIUM lets the caller point at it directly. */
 const executablePath = process.env.PW_CHROMIUM || undefined;
 const browser = await chromium.launch(executablePath ? { executablePath } : {});
-const page = await browser.newPage({ viewport: { width: 360, height: 780 } });
+
+/* See scripts/smoke-api.mjs: a fresh apparent client per run keeps repeated
+ * local runs from tripping the rate limiter. */
+const RUN_IP = '198.51.100.' + (1 + Math.floor(Math.random() * 250));
+const context = await browser.newContext({
+  viewport: { width: 360, height: 780 },
+  extraHTTPHeaders: { 'x-forwarded-for': RUN_IP }
+});
+const page = await context.newPage();
 if (SHOTS) fs.mkdirSync(SHOT_DIR, { recursive: true });
 let shotNo = 0;
 const shot = async (name) => {
@@ -137,7 +145,8 @@ try {
      'ถึงรุ่งเช้าวันที่ 1' + (prompts ? ' (หลังตอบทริกเกอร์ ' + prompts + ' ครั้ง)' : ''));
 
   /* ---- public display must not leak ---- */
-  const pub = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  const pub = await context.newPage();
+  await pub.setViewportSize({ width: 1280, height: 720 });
   await pub.goto(BASE + '/public/' + gameId, { waitUntil: 'networkidle' });
   await pub.waitForSelector('.pub-card');
   const aliveRoles = await pub.$$eval('.pub-card:not(.gone) .ps', (els) => els.map((e) => e.textContent.trim()));
@@ -149,21 +158,36 @@ try {
   await page.click('button:has-text("เริ่มช่วงอภิปราย")');
   await page.waitForSelector('.timer');
   ok(await page.locator('.timer').isVisible(), 'นาฬิกาอภิปรายเดิน');
+
+  /* ---- pause must stop the clock without moving the moderator off the screen ---- */
+  const beforePause = await page.locator('.timer').textContent();
+  await page.click('.ic[title="หยุดพัก"]');
+  await page.waitForSelector('.paused-banner');
+  ok(await page.locator('.timer').isVisible(), 'ระหว่างพักยังอยู่หน้าเดิม ไม่เด้งไปจออื่น');
+  await page.waitForTimeout(1800);
+  ok((await page.locator('.timer').textContent()) === beforePause, 'นาฬิกาหยุดเดินระหว่างพัก');
+  await page.click('.paused-banner button:has-text("เล่นต่อ")');
+  await page.waitForTimeout(600);
+  ok(!(await page.locator('.paused-banner').count()), 'เล่นต่อแล้วแถบหยุดพักหายไป');
   await page.click('button:has-text("เปิดการเสนอชื่อ")');
   await page.waitForSelector('button:has-text("เสนอชื่อ")');
   await page.locator('.vrow button:has-text("เสนอชื่อ")').first().click();
   await page.click('button:has-text("ปิดการเสนอชื่อและเริ่มลงคะแนน")');
-  await page.waitForSelector('text=บันทึกคะแนนทั้งหมด');
+  await page.waitForSelector('.vote-progress');
 
-  for (const sel of await page.locator('.card2:has-text("ลงคะแนน") select').all()) {
-    const options = await sel.locator('option').all();
-    await sel.selectOption({ index: 1 });
-    void options;
+  const voteSelects = await page.locator('.card2:has-text("ลงคะแนน") select').all();
+  const resolveButton = page.locator('button:has-text("สรุปผลการลงคะแนน")');
+  ok(await resolveButton.isDisabled(), 'ยังไม่ลงคะแนน ปุ่มสรุปผลต้องกดไม่ได้');
+
+  for (let i = 0; i < voteSelects.length; i++) {
+    await voteSelects[i].selectOption({ index: 1 });
+    if (i === 0 && voteSelects.length > 1) {
+      ok(await resolveButton.isDisabled(), 'ลงไม่ครบ ปุ่มสรุปผลต้องยังกดไม่ได้');
+    }
   }
-  await page.click('button:has-text("บันทึกคะแนนทั้งหมด")');
-  await page.waitForTimeout(400);
-  await page.click('button:has-text("สรุปผลการลงคะแนน")');
-  await page.waitForTimeout(600);
+  ok(await page.locator('.vote-progress.done').isVisible(), 'ลงครบแล้วแถบความคืบหน้าต้องขึ้นเขียว');
+  await resolveButton.click();
+  await page.waitForTimeout(800);
   if (await page.locator('button:has-text("ยิงขึ้นฟ้า")').count()) {
     await page.click('button:has-text("ยิงขึ้นฟ้า")');
     await page.waitForTimeout(400);
@@ -244,7 +268,7 @@ try {
   ok(!(await page.locator('#cover.show').count()), 'แตะแล้วกลับมาแสดงผลได้');
 
   /* ---- admin screen ---- */
-  const admin = await browser.newPage({ viewport: { width: 360, height: 780 } });
+  const admin = await context.newPage();
   await admin.goto(BASE + '/admin', { waitUntil: 'networkidle' });
   ok(await admin.locator('text=หน้าผู้ดูแลบทบาท').isVisible(), 'หน้าแอดมินขอรหัสผ่านก่อน');
   await admin.fill('input[type="password"]', process.env.ADMIN_PASSWORD || 'admin1234');

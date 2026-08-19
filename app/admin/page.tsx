@@ -4,6 +4,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { UiProvider, useUi } from '@/components/ui';
 
+interface OpenGame {
+  gameId: string; title: string; statusTh: string; dayNumber: number; nightNumber: number; updatedAt: string;
+}
+
 interface AdminRole {
   roleId: string;
   pack: string;
@@ -35,6 +39,7 @@ function AdminScreen() {
   const [roles, setRoles] = useState<AdminRole[]>([]);
   const [impactVerified, setImpactVerified] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [openGames, setOpenGames] = useState<OpenGame[]>([]);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -46,6 +51,11 @@ function AdminScreen() {
     setImpactVerified(body.impactVerified);
     setAuthed(true);
     setDirty(false);
+
+    /* The list of games in progress used to be public. It lives here now, as
+     * the recovery path for a moderator who lost the game id. */
+    const games = await fetch('/api/admin/games');
+    if (games.ok) setOpenGames((await games.json()).games || []);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -196,6 +206,28 @@ function AdminScreen() {
         <Link className="btn-ghost w-100 mt-2" style={{ display: 'block', textAlign: 'center' }}
               href="/admin/stats">📊 ดูสถิติข้ามเกม</Link>
       </div>
+
+      {openGames.length > 0 && (
+        <div className="card2">
+          <h6>🎲 เกมที่ยังเล่นค้างอยู่</h6>
+          <p className="hint">ใช้เมื่อผู้ดำเนินเกมลืมรหัสเกม — PIN ยังต้องกรอกที่หน้าเปิดเกมเหมือนเดิม</p>
+          {openGames.map((g) => (
+            <div className="prow" key={g.gameId}>
+              <div className="pname">
+                {g.title || g.gameId}
+                <div className="hint">
+                  {g.gameId} • {g.statusTh}
+                  {g.nightNumber ? ' • คืนที่ ' + g.nightNumber : ''}
+                  {g.dayNumber ? ' • วันที่ ' + g.dayNumber : ''}
+                </div>
+              </div>
+              <a className="btn-ghost" href={'/public/' + g.gameId} target="_blank" rel="noreferrer">
+                จอสาธารณะ
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
 
       {roles.map((r) => (
         <div className="card2" key={r.roleId} style={{ padding: 12 }}>

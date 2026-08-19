@@ -1,4 +1,6 @@
-import { runCommand, undoLastCommand, rematch, GameError } from '@/lib/storage.ts';
+import {
+  runCommand, undoLastCommand, rematch, reopenRoleAssignment, GameError
+} from '@/lib/storage.ts';
 import { grantModerator, requireModerator } from '@/lib/auth.ts';
 import { errorResponse, json, readJson } from '@/lib/api.ts';
 import { HANDLERS } from '@/lib/commands.ts';
@@ -19,6 +21,12 @@ export async function POST(req: Request) {
     const cmd = body as unknown as Command;
 
     if (action === 'undo') return json(await undoLastCommand(gameId));
+
+    /* Not a plain mutation: once the game has started this restores the
+     * snapshot from before the first night (see lib/storage.ts). */
+    if (action === 'reopenRoleAssignment') {
+      return json(await reopenRoleAssignment(cmd, body.reason as string | undefined));
+    }
 
     if (action === 'rematch') {
       const created = await rematch(gameId);

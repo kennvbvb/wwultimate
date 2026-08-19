@@ -37,8 +37,10 @@ export interface Bootstrap {
   appVersion: string;
   catalog: CatalogViewModel;
   defaults: RuleVariants;
-  openGames: { gameId: string; status: string; statusTh: string; dayNumber: number; nightNumber: number; title: string; updatedAt: string }[];
 }
+
+/** Games this device has opened before, remembered locally rather than served. */
+export interface RecentGame { gameId: string; title: string; at: number }
 
 export const getBootstrap = () => request<Bootstrap>('/api/bootstrap');
 

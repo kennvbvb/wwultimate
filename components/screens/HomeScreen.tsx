@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { Bootstrap } from '@/lib/client/api.ts';
+import type { Bootstrap, RecentGame } from '@/lib/client/api.ts';
 
 const NAME_POOL = ['สมชาย', 'สมหญิง', 'วิชัย', 'มานี', 'ปิติ', 'ชูใจ', 'วีระ', 'ดวงใจ',
   'ธนา', 'ณัฐ', 'ก้อง', 'แพร', 'ฟ้า', 'ต้น', 'มิ้นท์', 'บอส'];
@@ -13,8 +13,9 @@ export function parseNames(text: string): string[] {
     .map((s) => s.slice(0, 40));
 }
 
-export default function HomeScreen({ boot, onCreate, onOpen }: {
+export default function HomeScreen({ boot, recent, onCreate, onOpen }: {
   boot: Bootstrap | null;
+  recent: RecentGame[];
   onCreate: (names: string[], title: string) => void;
   onOpen: (gameId: string, pin: string) => void;
 }) {
@@ -30,6 +31,7 @@ export default function HomeScreen({ boot, onCreate, onOpen }: {
   };
 
   const names = parseNames(namesText);
+  void boot;
 
   return (
     <section className="page active">
@@ -68,20 +70,21 @@ export default function HomeScreen({ boot, onCreate, onOpen }: {
         <button className="btn-g w-100 mt-3" disabled={!openId || !pin}
                 onClick={() => onOpen(openId.trim(), pin.trim())}>เปิดเกม</button>
 
-        {boot && boot.openGames.length > 0 && (
+        {recent.length > 0 && (
           <div className="mt-3">
-            <div className="lbl">เกมที่ยังเล่นค้างอยู่</div>
-            {boot.openGames.map((g) => (
+            <div className="lbl">เกมที่เคยเปิดจากเครื่องนี้</div>
+            {recent.map((g) => (
               <div className="prow" key={g.gameId}>
                 <div className="pname">
                   {g.title || g.gameId}
-                  <div className="hint">{g.gameId} • {g.statusTh}
-                    {g.nightNumber ? ' • คืนที่ ' + g.nightNumber : ''}
-                    {g.dayNumber ? ' • วันที่ ' + g.dayNumber : ''}</div>
+                  <div className="hint">{g.gameId} • {new Date(g.at).toLocaleString('th-TH')}</div>
                 </div>
                 <button className="btn-ghost" onClick={() => setOpenId(g.gameId)}>เลือก</button>
               </div>
             ))}
+            <div className="hint mt-2">
+              รายการนี้เก็บอยู่ในเครื่องนี้เท่านั้น ถ้าลืมรหัสเกมให้ดูที่หน้าผู้ดูแล
+            </div>
           </div>
         )}
       </div>

@@ -163,3 +163,59 @@ test('คำสั่งสองคำสั่งพร้อมกันบ�
   const view = await S.moderatorView(g.gameId);
   eq(view.version, g.version + 1, 'เวอร์ชันต้องขยับแค่หนึ่งขั้น');
 });
+
+test('กลับไปแก้การแจกบทบาทหลังเริ่มเกมแล้ว ต้องกู้สถานะกลับไปก่อนคืนแรก', async () => {
+  const g = await newStoredGame(6);
+  let view = await S.moderatorView(g.gameId);
+
+  await S.runCommand({ gameId: g.gameId, expectedVersion: view.version, action: 'configureGame' },
+    'ตั้งค่ากติกา', false, (st) => E.configureGame(st, {
+      selectedRoles: [{ roleId: 'werewolf', count: 1 }, { roleId: 'villager', count: 5 }]
+    }));
+
+  view = await S.moderatorView(g.gameId);
+  await S.runCommand({ gameId: g.gameId, expectedVersion: view.version, action: 'assignRoles' },
+    'บันทึกการแจกบทบาท', false, (st) => E.assignRoles(st, st.players.map((p, i) => ({
+      playerId: p.playerId, roleId: i === 0 ? 'werewolf' : 'villager'
+    }))));
+
+  view = await S.moderatorView(g.gameId);
+  const started = await S.runCommand({ gameId: g.gameId, expectedVersion: view.version, action: 'startGame' },
+    'เริ่มเกม', true, (st) => E.startGame(st));
+  eq(started.status, 'FIRST_NIGHT', 'เกมเริ่มแล้ว');
+
+  /* somebody dies during the first night */
+  const victim = started.players[3];
+  const afterKill = await S.runCommand(
+    { gameId: g.gameId, expectedVersion: started.version, action: 'moderatorKill' },
+    'ผู้ดำเนินเกมสั่งให้เสียชีวิต', true,
+    (st) => E.moderatorKill(st, victim.playerId, 'ทดสอบ'));
+  eq(afterKill.players.find((p) => p.playerId === victim.playerId).alive, false, 'ผู้เล่นเสียชีวิตแล้ว');
+
+  const reopened = await S.reopenRoleAssignment(
+    { gameId: g.gameId, expectedVersion: afterKill.version, action: 'reopenRoleAssignment' },
+    'แจกการ์ดผิด');
+
+  eq(reopened.status, 'ROLE_ASSIGNMENT', 'กลับสู่ช่วงแจกบทบาท');
+  eq(reopened.rolesLocked, false, 'ปลดล็อกการแจกบทบาทแล้ว');
+  eq(reopened.nightNumber, 0, 'เลขคืนต้องกลับไปเป็นศูนย์');
+  eq(reopened.players.every((p) => p.alive), true, 'ผู้เล่นที่ตายระหว่างเกมต้องกลับมามีชีวิต');
+  eq(reopened.players.every((p) => p.statuses.length === 0), true, 'สถานะระหว่างเกมต้องถูกล้าง');
+  assert(reopened.version > afterKill.version, 'เวอร์ชันต้องเดินหน้าต่อ ไม่ถอยหลัง');
+});
+
+test('ยังไม่เริ่มเกม การกลับไปแก้การแจกบทบาทเป็นแค่การปลดล็อก', async () => {
+  const g = await newStoredGame(5);
+  let view = await S.moderatorView(g.gameId);
+  await S.runCommand({ gameId: g.gameId, expectedVersion: view.version, action: 'configureGame' },
+    'ตั้งค่ากติกา', false, (st) => E.configureGame(st, {
+      selectedRoles: [{ roleId: 'werewolf', count: 1 }, { roleId: 'villager', count: 4 }]
+    }));
+
+  view = await S.moderatorView(g.gameId);
+  const reopened = await S.reopenRoleAssignment(
+    { gameId: g.gameId, expectedVersion: view.version, action: 'reopenRoleAssignment' }, 'แก้ชุดบทบาท');
+
+  eq(reopened.rolesLocked, false, 'ปลดล็อกแล้ว');
+  eq(reopened.selectedRoles.length, 2, 'ชุดบทบาทที่เลือกไว้ต้องยังอยู่');
+});

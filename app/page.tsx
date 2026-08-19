@@ -1,9 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ModeratorViewModel, RuleVariants, SelectedRole } from '@/lib/types.ts';
 import * as api from '@/lib/client/api.ts';
-import { ApiError, type Bootstrap } from '@/lib/client/api.ts';
+import { ApiError, type Bootstrap, type RecentGame } from '@/lib/client/api.ts';
 import { useGameStream } from '@/lib/client/useGameStream.ts';
 import { Loading, Modal, PrivacyCover, UiProvider, useUi } from '@/components/ui';
 import HomeScreen from '@/components/screens/HomeScreen';
@@ -15,6 +15,28 @@ import DayScreen from '@/components/screens/DayScreen';
 import EndScreen from '@/components/screens/EndScreen';
 
 const LAST_GAME_KEY = 'uw_last_game_v2';
+const RECENT_KEY = 'uw_recent_games_v1';
+const RECENT_MAX = 8;
+
+/**
+ * Games this device has opened, kept locally. The server used to hand every
+ * visitor the list of games in progress; a teacher's own device is the right
+ * place for that convenience.
+ */
+function readRecent(): RecentGame[] {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list : [];
+  } catch { return []; }
+}
+
+function rememberRecent(game: { gameId: string; title: string }): RecentGame[] {
+  const entry = { gameId: game.gameId, title: game.title, at: Date.now() };
+  const next = [entry, ...readRecent().filter((g) => g.gameId !== entry.gameId)].slice(0, RECENT_MAX);
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+  return next;
+}
 
 type Page = 'home' | 'players' | 'roles' | 'assign' | 'night' | 'day' | 'end';
 
@@ -45,11 +67,18 @@ function ModeratorConsole() {
   const [tools, setTools] = useState(false);
   const [log, setLog] = useState<{ type: string; at: string }[] | null>(null);
   const [pinOnce, setPinOnce] = useState('');
+  const [recent, setRecent] = useState<RecentGame[]>([]);
+  /* Two commands can be sent back to back (save votes, then close the vote).
+   * React has not re-rendered in between, so the version has to come from here
+   * rather than from the render's copy — otherwise the second command carries a
+   * stale expectedVersion and the server rejects it as a conflict. */
+  const vmRef = useRef<ModeratorViewModel | null>(null);
 
   /* ---------------- boot ---------------- */
 
   useEffect(() => {
     api.getBootstrap().then(setBoot).catch((e) => ui.toast(e.message, 'bad'));
+    setRecent(readRecent());
     let last = '';
     try { last = localStorage.getItem(LAST_GAME_KEY) || ''; } catch { /* private mode */ }
     if (last) {
@@ -60,30 +89,37 @@ function ModeratorConsole() {
   }, []);
 
   const applyVm = useCallback((next: ModeratorViewModel) => {
+    vmRef.current = next;
     setVm(next);
     try { localStorage.setItem(LAST_GAME_KEY, next.gameId); } catch { /* private mode */ }
+    setRecent(rememberRecent({ gameId: next.gameId, title: next.title }));
     setPage(routeByStatus(next));
   }, []);
 
   const reload = useCallback(() => {
     if (!vm) return;
-    api.getGame(vm.gameId).then(setVm).catch((e) => ui.toast(e.message, 'bad'));
+    api.getGame(vm.gameId)
+      .then((next) => { vmRef.current = next; setVm(next); })
+      .catch((e) => ui.toast(e.message, 'bad'));
   }, [vm, ui]);
 
   /* Another device (or the public screen) changed the game — pick it up. */
   useGameStream(vm ? vm.gameId : null, vm?.version || 0, () => {
     if (!vm) return;
-    api.getGame(vm.gameId).then(setVm).catch(() => { /* transient */ });
+    api.getGame(vm.gameId)
+      .then((next) => { vmRef.current = next; setVm(next); })
+      .catch(() => { /* transient */ });
   });
 
   /* ---------------- command plumbing ---------------- */
 
   const run = useCallback(async (action: string, extra: Record<string, unknown> = {}) => {
-    if (!vm) return;
+    const current = vmRef.current;
+    if (!current) return;
     setBusy(true);
     try {
       const next = await api.sendCommand({
-        action, gameId: vm.gameId, expectedVersion: vm.version, ...extra
+        action, gameId: current.gameId, expectedVersion: current.version, ...extra
       });
       applyVm(next);
       return next;
@@ -94,6 +130,7 @@ function ModeratorConsole() {
         reload();
       } else if (err.isAuth) {
         ui.toast('หมดเวลาเข้าสู่ระบบ กรุณากรอก PIN อีกครั้ง', 'bad');
+        vmRef.current = null;
         setVm(null);
         setPage('home');
       } else {
@@ -103,7 +140,7 @@ function ModeratorConsole() {
     } finally {
       setBusy(false);
     }
-  }, [vm, applyVm, reload, ui]);
+  }, [applyVm, reload, ui]);
 
   /**
    * ruleVariants.randomDelayMs: pause a random moment before a "nothing
@@ -181,9 +218,12 @@ function ModeratorConsole() {
 
   const toolReopen = async () => {
     setTools(false);
+    const started = vm ? (vm.nightNumber > 0 || vm.dayNumber > 0) : false;
     const res = await ui.confirm({
-      title: 'กลับไปแก้การแจกบทบาท', icon: '🔓', danger: true,
-      text: 'เหตุการณ์ทั้งหมดในเกมนี้จะถูกล้าง และเริ่มนับคืนใหม่',
+      title: 'กลับไปแก้การแจกบทบาท', icon: '🔓', danger: started,
+      text: started
+        ? 'เกมเริ่มไปแล้ว ระบบจะกู้สถานะกลับไปก่อนคืนแรก — การตาย สถานะ และผลทุกอย่างที่เกิดขึ้นระหว่างเกมจะหายไปทั้งหมด'
+        : 'ปลดล็อกให้แก้ว่าใครได้การ์ดใบไหน ยังไม่มีเหตุการณ์ใดในเกมให้ล้าง',
       input: { label: 'เหตุผล (ไม่บังคับ)' }
     });
     if (!res.confirmed) return;
@@ -233,7 +273,7 @@ function ModeratorConsole() {
 
   const body = useMemo(() => {
     if (!vm || page === 'home') {
-      return <HomeScreen boot={boot} onCreate={createGame} onOpen={openGame} />;
+      return <HomeScreen boot={boot} recent={recent} onCreate={createGame} onOpen={openGame} />;
     }
     switch (page) {
       case 'players':
@@ -262,7 +302,11 @@ function ModeratorConsole() {
           onStartDiscussion={() => run('startDiscussion')}
           onOpenNomination={() => run('openNomination')}
           onCloseNomination={(nomineeIds) => run('startNomination', { nomineeIds })}
-          onSubmitVotes={(votes) => run('submitVote', { votes }).then((n) => { if (n) ui.toast('บันทึกคะแนนแล้ว', 'good'); })}
+          onSubmitVotes={async (votes) => {
+            const next = await run('submitVote', { votes });
+            if (next) ui.toast('บันทึกคะแนนแล้ว', 'good');
+            return !!next;
+          }}
           onResolveVote={(choice) => run('resolveVote', { moderatorChoice: choice || null })}
           onForceEndDay={() => run('forceEndDay')}
           onModeratorKill={(playerId, reason) => run('moderatorKill', { playerId, reason })}
@@ -273,7 +317,7 @@ function ModeratorConsole() {
         return null;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vm, page, boot, catalog, impactVerified]);
+  }, [vm, page, boot, catalog, impactVerified, recent]);
 
   const phase = [
     vm?.nightNumber ? 'คืนที่ ' + vm.nightNumber : '',
@@ -312,6 +356,15 @@ function ModeratorConsole() {
       )}
 
       <main id="main">
+        {vm?.paused && (
+          <div className="paused-banner">
+            <div>
+              <b>⏸ เกมหยุดพักอยู่</b>
+              <div className="hint">นาฬิกาอภิปรายและเสนอชื่อหยุดเดินแล้ว จะเดินต่อเมื่อกดเล่นต่อ</div>
+            </div>
+            <button className="btn-gold" onClick={() => run('resumeGame')}>เล่นต่อ</button>
+          </div>
+        )}
         {pinOnce && vm && (
           <div className="card2">
             <h5>🔐 PIN ผู้ดำเนินเกม</h5>
@@ -346,7 +399,7 @@ function ModeratorConsole() {
             </button>
             <button className="toolbtn" onClick={toolReopen}>
               <span>🔓</span><span><b>กลับไปแก้การแจกบทบาท</b>
-                <small>ล้างเหตุการณ์ในเกมทั้งหมด ใช้เมื่อแจกผิดตั้งแต่ต้น</small></span>
+                <small>ถ้าเกมเริ่มแล้วจะกู้สถานะกลับไปก่อนคืนแรก ใช้เมื่อแจกผิดตั้งแต่ต้น</small></span>
             </button>
             <button className="toolbtn" onClick={toolKill}>
               <span>☠️</span><span><b>สั่งให้ผู้เล่นเสียชีวิต</b>
@@ -383,7 +436,12 @@ function ModeratorConsole() {
 
 /** Same routing table the Apps Script client used. */
 function routeByStatus(vm: ModeratorViewModel): Page {
-  switch (vm.status) {
+  /* A break must not throw the moderator onto another screen — stay on the
+   * phase the game was paused from and let the banner explain the state. */
+  const status = vm.status === 'PAUSED' && vm.paused
+    ? (vm.paused.from as ModeratorViewModel['status'])
+    : vm.status;
+  switch (status) {
     case 'SETUP': return vm.players.length ? 'roles' : 'players';
     case 'ROLE_ASSIGNMENT': return 'assign';
     case 'FIRST_NIGHT':
