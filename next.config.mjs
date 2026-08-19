@@ -31,6 +31,17 @@ const securityHeaders = [
   { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' }
 ];
 
+import fs from 'node:fs';
+
+/* The engine is generated from lib/engine/*.gs by the prebuild step. Without
+ * this check a direct `next build` fails with a dozen "module not found" lines
+ * that say nothing about the real cause. */
+if (!fs.existsSync(new URL('./lib/engine.generated.js', import.meta.url))) {
+  throw new Error(
+    'ยังไม่ได้สร้าง lib/engine.generated.js — ใช้ "npm run build" หรือ "npm run dev" ' +
+    '(หรือรัน "npm run build:engine" ก่อน) อย่าเรียก next build ตรง ๆ');
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,

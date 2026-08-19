@@ -47,7 +47,8 @@ npm run db:migrate             # สร้างตารางใน DATABASE_U
 npm run dev                    # http://localhost:3000
 ```
 
-ต้องมี Node 22 ขึ้นไป (ใช้ความสามารถอ่านไฟล์ `.ts` ตรง ๆ ของ Node ในชั้นเทสต์)
+ต้องมี Node 22.6 ขึ้นไป (ชั้นเทสต์รันไฟล์ `.ts` ด้วย Node ตรง ๆ) — ประกาศไว้ใน `engines` ของ
+`package.json` แล้ว Vercel จึงเลือกเวอร์ชันให้เอง
 
 ### ตัวแปรสภาพแวดล้อม
 
@@ -113,7 +114,8 @@ npm run smoke:ui     # เปิด Chromium ขนาดมือถือ เ�
    vercel env pull .env.local
    npm run db:migrate
    ```
-5. Deploy
+5. Deploy — Build Command ใช้ค่าเริ่มต้น `npm run build` (สำคัญ: มันจะสร้าง
+   `lib/engine.generated.js` ให้ก่อน ถ้าตั้งเป็น `next build` ตรง ๆ จะ build ไม่ผ่าน)
 
 `npm run build` จะสร้าง `lib/engine.generated.js` ให้อัตโนมัติผ่าน `prebuild`
 
