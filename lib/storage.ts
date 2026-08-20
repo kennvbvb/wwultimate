@@ -5,6 +5,7 @@ import { query, withTransaction } from './db.ts';
 import { ensureCatalogLoaded } from './catalog.ts';
 import { secureGameId, securePin } from './ids.ts';
 import { checkPlayerNames } from './players.ts';
+import { GameError } from './errors.ts';
 import { nightTargetHints } from './nightHints.ts';
 import { pauseInfo } from './pause.ts';
 import { voteProgress } from './voting.ts';
@@ -74,8 +75,7 @@ function moderatorViewOf(state: GameState): ModeratorViewModel {
   return view;
 }
 
-/** Turns any engine/db failure into the Thai message the UI shows verbatim. */
-export class GameError extends Error {}
+export { GameError } from './errors.ts';
 
 /* ---------------- events ---------------- */
 

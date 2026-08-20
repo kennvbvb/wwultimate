@@ -18,7 +18,8 @@
     "start": "next start",
     "db:migrate": "node scripts/migrate.mjs",
     "smoke": "node scripts/smoke-api.mjs",
-    "smoke:ui": "node scripts/smoke-ui.mjs"
+    "smoke:ui": "node scripts/smoke-ui.mjs",
+    "verify:deploy": "node scripts/verify-deploy.mjs"
   },
   "repository": {
     "type": "git",

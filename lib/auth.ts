@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { SignJWT, jwtVerify } from 'jose';
 import { verifyPin } from './storage.ts';
+import { AuthError } from './errors.ts';
 
 /**
  * Per-game moderator access.
@@ -84,9 +85,7 @@ export async function logout(): Promise<void> {
   jar.delete(COOKIE);
 }
 
-export class AuthError extends Error {
-  constructor(message = 'ต้องกรอก PIN ผู้ดำเนินเกมก่อน') { super(message); }
-}
+export { AuthError } from './errors.ts';
 
 /** Throws unless this device has already proved it owns the game. */
 export async function requireModerator(gameId: string): Promise<void> {

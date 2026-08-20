@@ -1,31 +1,26 @@
 import { NextResponse } from 'next/server';
-import { AuthError } from './auth.ts';
 import { RateLimitError } from './rateLimit.ts';
-import { GameError } from './storage.ts';
+import { classifyError } from './errors.ts';
 
 /**
  * One place that turns a thrown Error into a response. Every message the engine
  * throws is already written in Thai for the moderator, so it is passed through
- * untouched — the UI shows it verbatim.
+ * untouched — the UI shows it verbatim. The classification itself lives in
+ * lib/errors.ts, which has no Next.js imports and can be tested directly.
  */
 export function errorResponse(e: unknown): NextResponse {
-  const message = e instanceof Error ? e.message : 'เกิดข้อผิดพลาดที่ไม่รู้จัก';
   if (e instanceof RateLimitError) {
-    return NextResponse.json({ error: message }, {
+    return NextResponse.json({ error: e.message }, {
       status: 429, headers: { 'retry-after': String(e.retryAfterSeconds) }
     });
   }
-  if (e instanceof AuthError) return NextResponse.json({ error: message }, { status: 401 });
-  /* A stale screen retrying an old command is normal, not a server fault. */
-  if (/ข้อมูลไม่ตรงกัน/.test(message)) return NextResponse.json({ error: message }, { status: 409 });
-  /* Checked before the generic GameError branch: "no such game" is a 404 even
-   * though the engine raises it the same way as a rule violation. */
-  if (/ไม่พบเกม|ไม่พบผู้เล่น|ไม่พบบทบาท/.test(message)) {
-    return NextResponse.json({ error: message }, { status: 404 });
-  }
-  if (e instanceof GameError) return NextResponse.json({ error: message }, { status: 400 });
-  console.error('command failed:', e);
-  return NextResponse.json({ error: message }, { status: 400 });
+
+  const mapped = classifyError(e);
+  if (mapped.logDetail) console.error('request failed (' + mapped.status + '):', mapped.logDetail);
+  return NextResponse.json({ error: mapped.message }, {
+    status: mapped.status,
+    ...(mapped.headers ? { headers: mapped.headers } : {})
+  });
 }
 
 export function json<T>(data: T, status = 200): NextResponse {

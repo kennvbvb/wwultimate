@@ -29,7 +29,7 @@
 | หัวข้อ | สถานะ |
 |---|---|
 | เวอร์ชัน | 2.0.0 (ย้ายจาก Google Apps Script 1.0.0 มาแล้วครบทุกเฟส) |
-| ชุดทดสอบ | **ผ่าน 139 / ล้มเหลว 0** (`npm test`) |
+| ชุดทดสอบ | **ผ่าน 144 / ล้มเหลว 0** (`npm test`) |
 | บทบาท | ครบ 46 (Core 34 / Wolfpack 6 / Hunting Party 6) |
 | คำสั่งที่หน้าเว็บสั่งได้ | 22 ตัว ทุกตัวมีปุ่มเรียกจากหน้าจอและถูกยิงใน `npm run smoke` |
 | ตัวเลือกกติกา | 18 ตัว ทุกตัวมีโค้ดรองรับจริงและมีเทสต์คุม |
@@ -79,7 +79,8 @@ lib/
   commands.ts                  138  ตารางคำสั่ง 20 ตัว + label + ธง snapshot
   nightHints.ts                     บอกว่าปุ่มเป้าหมายใดกดไม่ได้และเพราะอะไร
   stats.ts                          รวมสถิติข้ามเกมจากเกมที่จบแล้ว
-  api.ts                        34  แปลง Error เป็น HTTP status
+  api.ts                        34  แปลง Error เป็น HTTP status (อะแดปเตอร์ของ errors.ts)
+  errors.ts                         ชนิดข้อผิดพลาดและกฎการแปลงเป็นสถานะ (ทดสอบได้โดยไม่ต้องมี Next)
   players.ts                        ตรวจชื่อผู้เล่น: ตัดช่องว่าง ห้ามว่าง เตือนชื่อซ้ำ
   retention.ts                      ล้างข้อมูลหมดอายุ ปิดเกมค้าง ลบเกมถาวร
   client/{api,useGameStream,variants,announce,chime,nav}.ts
@@ -88,6 +89,7 @@ scripts/
   migrate.mjs / ensure-test-db.mjs / run-tests.mjs
   smoke-api.mjs                304  เดินเกมจริงผ่าน HTTP ครบทุกคำสั่ง
   smoke-ui.mjs                 222  เดินเกม 8 คนบน Chromium ขนาดมือถือ
+  verify-deploy.mjs                 ตรวจเว็บที่ deploy แล้วแบบอ่านอย่างเดียว (ปลอดภัยกับ production)
 migrations/001_init.sql, 002_rate_limit.sql, 003_retention.sql
 tests/{engine,storage,publicview,nighthints,stats,voting,pause,ids,ratelimit,announce,
        chime,players,nav,retention}.test.js + helpers.js
@@ -257,6 +259,8 @@ engine ตัดสินจากคะแนนเท่าที่มีใ�
 - **`lib/retention.ts` ไม่ทำงานเอง** — แอดมินกดเองที่ `/admin` เพราะแต่ละโรงเรียนมีจังหวะต่างกัน
   ระบบเก็บชื่อเด็กจริง จึงต้องลบได้และต้องลบให้หมดทั้ง events/snapshots/idempotency
 - **`/api/health`** ตรวจฐานข้อมูลจริง ใช้กับ uptime monitor ได้ และต้องไม่บอกรายละเอียดภายใน
+- **ข้อผิดพลาดระดับโครงสร้างพื้นฐานตอบ 503 พร้อมข้อความไทยกลาง ๆ** (`lib/errors.ts`)
+  ห้ามให้ข้อความของ driver เช่น `connect ECONNREFUSED 127.0.0.1:5432` หลุดไปถึงผู้ใช้
 
 ### ด้านความปลอดภัยที่ต้องคงไว้
 
@@ -316,7 +320,7 @@ snapshot (เฉพาะคำสั่งสำคัญ) → `UPDATE` → `IN
 ## 9. ชุดทดสอบ
 
 ```bash
-npm test              # ต้องได้ ผ่าน 139 / ล้มเหลว 0
+npm test              # ต้องได้ ผ่าน 144 / ล้มเหลว 0
 npm run test:engine   # เฉพาะตรรกะเกม ไม่ต้องมีฐานข้อมูล
 ```
 
@@ -336,6 +340,7 @@ npm run test:engine   # เฉพาะตรรกะเกม ไม่ต้�
 | `tests/players.test.js` | 4 | ตัดช่องว่าง ห้ามชื่อว่าง และตรวจชื่อซ้ำ |
 | `tests/nav.test.js` | 7 | แท็บที่กดได้ในแต่ละช่วงของเกม |
 | `tests/retention.test.js` | 5 | ลบเกมแล้วต้องไม่เหลือข้อมูล และเกมค้าง/สั่งจบมือไม่เข้าสถิติ |
+| `tests/apierrors.test.js` | 5 | ฐานข้อมูลล่มต้องตอบ 503 แบบไม่บอกโฮสต์/พอร์ต |
 
 เทสต์ชั้นจัดเก็บข้อมูลรันบน **Postgres จริง** ไม่ใช่ของจำลอง เพราะของจำลองไม่รู้จัก
 `SELECT ... FOR UPDATE` ซึ่งเป็นสิ่งที่เทสต์กลุ่มนี้ตั้งใจพิสูจน์
@@ -357,7 +362,7 @@ npm run smoke:ui   # Chromium 360px เดินเกม 8 คนจนปร�
 ```bash
 npm run build:engine     # การ์ดกัน Apps Script API + ตรวจรายชื่อ export
 npx tsc --noEmit         # type ทั้งโปรเจกต์
-npm test                 # 139/139
+npm test                 # 144/144
 ```
 
 ---
