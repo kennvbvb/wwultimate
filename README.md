@@ -110,7 +110,7 @@ npm run smoke:ui     # เปิด Chromium ขนาดมือถือ เ�
 1. Vercel → New Project → เลือก repo นี้
 2. Storage → Create → **Neon Postgres** → เชื่อมกับโปรเจกต์ (Vercel ใส่ `DATABASE_URL` ให้เอง)
 3. Settings → Environment Variables → ใส่ `AUTH_SECRET` และ `ADMIN_PASSWORD`
-4. รัน migration หนึ่งครั้ง:
+4. รัน migration หนึ่งครั้ง (รายละเอียดเต็มอยู่ที่ [วิธีรัน migration แบบละเอียด](#วิธีรัน-migration-แบบละเอียด)):
    ```bash
    vercel env pull .env.local
    npm run db:migrate
@@ -138,6 +138,66 @@ endpoint ที่ต้องมีรหัสผ่านปิดอยู�
 - เข้า `/admin` เดือนละครั้งเพื่อกด **ล้างข้อมูลที่หมดอายุ** และลบเกมเก่าที่ไม่ต้องใช้แล้ว
   (ระบบเก็บชื่อนักเรียนไว้ จึงไม่ควรเก็บนานเกินจำเป็น)
 - เปิด Point-in-time restore ของ Neon แล้วลองกู้ข้อมูลจริงหนึ่งครั้งก่อนใช้สอน
+
+### วิธีรัน migration แบบละเอียด
+
+migration คือไฟล์ `.sql` ใน `migrations/` ที่สร้างตารางและคอลัมน์ให้ฐานข้อมูล
+รันจาก**เครื่องของคุณ** ชี้ไปที่ฐานข้อมูลของ production — Vercel ไม่รันให้เองตอน deploy
+
+รันซ้ำได้ปลอดภัยเสมอ ไฟล์ที่รันไปแล้วจะถูกข้าม
+
+#### วิธีที่ 1 — ดึงค่าจาก Vercel (แนะนำ)
+
+```bash
+npm i -g vercel          # ครั้งเดียวพอ
+vercel login             # เปิดเบราว์เซอร์ให้ยืนยันตัวตน
+cd /path/to/wwultimate   # โฟลเดอร์โปรเจกต์
+vercel link              # ครั้งแรกเท่านั้น — เลือกโปรเจกต์บน Vercel ให้ตรง
+vercel env pull .env.local
+npm run db:migrate
+```
+
+`vercel env pull` จะเขียนไฟล์ `.env.local` ที่มี `DATABASE_URL` ของจริง
+(`.env.local` อยู่ใน `.gitignore` แล้ว จึงไม่ถูก commit)
+`npm run db:migrate` อ่านไฟล์นี้ให้เอง ไม่ต้องตั้งค่าอะไรเพิ่ม
+
+#### วิธีที่ 2 — ใส่ค่าเชื่อมต่อตรง ๆ (ไม่ต้องลง Vercel CLI)
+
+คัดลอกค่า `DATABASE_URL` จาก Vercel → โปรเจกต์ → **Storage** → เลือกฐานข้อมูล → **.env.local**
+(หรือจาก Neon → **Connection string**) แล้ว
+
+```bash
+DATABASE_URL="postgres://user:pass@host/db?sslmode=require" npm run db:migrate
+```
+
+ใส่เครื่องหมายคำพูดครอบเสมอ เพราะค่ามักมีอักขระพิเศษ
+
+#### ผลลัพธ์ที่ควรเห็น
+
+```
+ฐานข้อมูลปลายทาง: postgres://***@ep-xxxx.neon.tech/neondb
+ใช้ migration แล้ว: 003_retention.sql
+เสร็จสิ้น 1 migration
+```
+
+ถ้าฐานข้อมูลอัปเดตอยู่แล้วจะขึ้นว่า `ฐานข้อมูลเป็นเวอร์ชันล่าสุดอยู่แล้ว` — ถือว่าปกติ
+
+#### ตรวจว่าสำเร็จจริง
+
+```bash
+curl -s https://ที่อยู่เว็บของคุณ/api/health
+```
+
+ต้องได้ `"schema":"ok"` แล้วเปิดเว็บสร้างเกมทดสอบหนึ่งเกม
+
+#### ปัญหาที่พบบ่อย
+
+| ข้อความ | แปลว่า | แก้อย่างไร |
+|---|---|---|
+| `ไม่พบ DATABASE_URL` | ยังไม่มี `.env.local` หรืออยู่ผิดโฟลเดอร์ | `cd` ให้ถูกโฟลเดอร์ แล้ว `vercel env pull .env.local` ใหม่ |
+| `ต่อฐานข้อมูลไม่ได้` | ค่าเชื่อมต่อผิด หรือคัดลอกมาไม่ครบ | คัดลอก `DATABASE_URL` ใหม่ทั้งบรรทัด รวม `?sslmode=require` |
+| `self-signed certificate` | ค่าที่ใช้ไม่ใช่ของ Neon/Vercel | ใช้ค่าจาก Vercel เท่านั้น อย่าปิดการตรวจใบรับรอง |
+| เว็บยังขึ้น error เหมือนเดิม | รัน migration ใส่คนละฐานข้อมูล | ดูบรรทัด `ฐานข้อมูลปลายทาง:` ว่าตรงกับของ production หรือไม่ |
 
 ### migration ใหม่
 
