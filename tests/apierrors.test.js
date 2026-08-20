@@ -40,3 +40,22 @@ test('ข้อผิดพลาดตามกติกาเกม ยัง�
 test('ไม่พบเกม ยังเป็น 404', () => {
   eq(classifyError(new GameError('ไม่พบเกมรหัส GAME-XXXXXX')).status, 404, 'ต้องเป็น 404');
 });
+
+test('คอลัมน์หายเพราะยังไม่ได้รัน migration ต้องบอกวิธีแก้ ไม่ใช่ข้อความดิบจาก Postgres', () => {
+  const err = Object.assign(
+    new Error('column "outcome" of relation "games" does not exist'), { code: '42703' });
+  const mapped = classifyError(err);
+  eq(mapped.status, 503, 'ต้องเป็น 503 เพราะเป็นปัญหาของระบบ ไม่ใช่ผู้ใช้ทำผิด');
+  eq(mapped.headers['retry-after'], '30', 'บอกให้ลองใหม่เมื่อไร');
+  eq(mapped.logDetail, err.message, 'ข้อความจริงต้องถูกเก็บไว้ให้ log');
+
+  assert(mapped.message.indexOf('migration') > 0, 'ต้องบอกว่าให้รัน migration');
+  assert(mapped.message.indexOf('outcome') < 0, 'ห้ามบอกชื่อคอลัมน์ภายใน');
+  assert(mapped.message.indexOf('relation') < 0, 'ห้ามบอกศัพท์ของฐานข้อมูล');
+});
+
+test('ตารางหายทั้งตาราง ก็ต้องได้คำแนะนำเดียวกัน แม้ไม่มีรหัสข้อผิดพลาดติดมา', () => {
+  const mapped = classifyError(new Error('relation "rate_limits" does not exist'));
+  eq(mapped.status, 503, 'ต้องเป็น 503');
+  assert(mapped.message.indexOf('db:migrate') > 0, 'ต้องบอกคำสั่งที่ต้องรัน');
+});

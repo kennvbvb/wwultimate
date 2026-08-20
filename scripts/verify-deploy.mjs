@@ -42,10 +42,18 @@ ok(home.status === 200, 'หน้าแรกตอบ 200', home.error || ('�
 
 /* ---- database ---- */
 const health = await get('/api/health');
-ok(health.status === 200 && health.body?.ok === true,
+ok(health.body?.db === 'up',
    'ต่อฐานข้อมูลได้ (/api/health)',
-   health.status === 503 ? 'ตอบ 503 — ตรวจ DATABASE_URL และว่ารัน migration แล้วหรือยัง'
-                         : 'ได้ ' + health.status);
+   'ได้ ' + health.status + ' — ตรวจ DATABASE_URL ของ deployment');
+
+/* The commonest way this app breaks in production is code that shipped ahead of
+ * its migrations, so it gets a check of its own with the fix spelled out. */
+ok(health.body?.schema === 'ok',
+   'ฐานข้อมูลอัปเดตครบทุก migration',
+   health.body?.hint || 'ได้ schema=' + (health.body?.schema ?? '—') + ' — รัน npm run db:migrate');
+
+ok(health.status === 200 && health.body?.ok === true,
+   'สถานะรวมของระบบเป็นปกติ', 'ได้ ' + health.status);
 if (health.body?.appVersion) notes.push('เวอร์ชันที่ deploy อยู่: ' + health.body.appVersion);
 
 /* ---- role catalog ---- */
@@ -107,6 +115,11 @@ console.log('\n' + '='.repeat(52));
 console.log('ผ่าน ' + passed + ' / ล้มเหลว ' + failed);
 for (const note of notes) console.log('• ' + note);
 console.log('='.repeat(52));
+if (health.body?.schema === 'outdated') {
+  console.log('\nวิธีแก้: ดึงค่า environment ของ production มาแล้วรัน migration');
+  console.log('  vercel env pull .env.local');
+  console.log('  npm run db:migrate');
+}
 if (!failed) {
   console.log('\nขั้นต่อไป: สร้างเกมทดสอบหนึ่งเกมบนเว็บจริง เดินให้จบหนึ่งคืน แล้วลบทิ้งที่ /admin');
 }

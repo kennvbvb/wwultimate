@@ -36,8 +36,31 @@ function isInfrastructureFailure(e: unknown): boolean {
     .test(String(err?.message || ''));
 }
 
+/**
+ * A missing table or column means the deploy ran ahead of its migrations. The
+ * Postgres message is precise but unhelpful to whoever is holding the phone, so
+ * it is replaced with the instruction that actually fixes it.
+ */
+function isSchemaDrift(e: unknown): boolean {
+  const err = e as { code?: string; message?: string };
+  /* 42P01 undefined_table, 42703 undefined_column, 42883 undefined_function */
+  if (/^(42P01|42703|42883)$/.test(String(err?.code || ''))) return true;
+  return /does not exist/.test(String(err?.message || '')) &&
+    /relation|column/.test(String(err?.message || ''));
+}
+
 export function classifyError(e: unknown): ErrorMapping {
   const message = e instanceof Error ? e.message : 'เกิดข้อผิดพลาดที่ไม่รู้จัก';
+
+  if (isSchemaDrift(e)) {
+    return {
+      status: 503,
+      message: 'ฐานข้อมูลยังไม่ได้อัปเดตเป็นเวอร์ชันล่าสุด กรุณาแจ้งผู้ดูแลให้รัน migration ' +
+        '(npm run db:migrate) แล้วลองใหม่อีกครั้ง',
+      headers: { 'retry-after': '30' },
+      logDetail: message
+    };
+  }
 
   if (isInfrastructureFailure(e)) {
     return {

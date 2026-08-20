@@ -341,6 +341,8 @@ ok(stats.body.recent.every((g) => g.winnersTh), 'ทุกเกมในรา�
 const health = await call('/api/health');
 ok(health.status === 200 && health.body.ok === true && health.body.db === 'up',
    'health check บอกว่าระบบและฐานข้อมูลพร้อม');
+ok(health.body.schema === 'ok' && health.body.hint === undefined,
+   'health check ยืนยันว่ารัน migration ครบแล้ว');
 
 const headerRes = await fetch(BASE + '/');
 const csp = headerRes.headers.get('content-security-policy') || '';
